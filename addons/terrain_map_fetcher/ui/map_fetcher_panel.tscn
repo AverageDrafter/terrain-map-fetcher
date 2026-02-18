@@ -1,0 +1,173 @@
+[gd_scene format=3 uid="uid://cgr4io2j8xvgg"]
+
+[ext_resource type="Script" uid="uid://b08pdnx78qfko" path="res://addons/terrain_map_fetcher/ui/map_fetcher_panel.gd" id="1_panel"]
+
+[node name="MapFetcherPanel" type="Control" unique_id=1572509651]
+custom_minimum_size = Vector2(280, 540)
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("1_panel")
+
+[node name="MarginContainer" type="MarginContainer" parent="." unique_id=917431648]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 8
+
+[node name="VBox" type="VBoxContainer" parent="MarginContainer" unique_id=552085039]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Title" type="Label" parent="MarginContainer/VBox" unique_id=2144075836]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Terrain Map Fetcher"
+
+[node name="HSeparator" type="HSeparator" parent="MarginContainer/VBox" unique_id=1001180485]
+layout_mode = 2
+
+[node name="TabContainer" type="TabContainer" parent="MarginContainer/VBox" unique_id=423464406]
+layout_mode = 2
+size_flags_vertical = 3
+current_tab = 0
+
+[node name="Setup" type="VBoxContainer" parent="MarginContainer/VBox/TabContainer" unique_id=1847997686]
+layout_mode = 2
+metadata/_tab_index = 0
+
+[node name="InfoLabel" type="Label" parent="MarginContainer/VBox/TabContainer/Setup" unique_id=1597175888]
+layout_mode = 2
+text = "Before fetching terrain data, verify that the required Python packages are installed."
+autowrap_mode = 3
+
+[node name="CheckBtn" type="Button" parent="MarginContainer/VBox/TabContainer/Setup" unique_id=462560361]
+layout_mode = 2
+text = "Check Dependencies"
+
+[node name="InstallBtn" type="Button" parent="MarginContainer/VBox/TabContainer/Setup" unique_id=949899140]
+layout_mode = 2
+text = "Install Missing Dependencies"
+
+[node name="DepOutput" type="TextEdit" parent="MarginContainer/VBox/TabContainer/Setup" unique_id=1602793856]
+custom_minimum_size = Vector2(0, 120)
+layout_mode = 2
+size_flags_vertical = 3
+placeholder_text = "Output will appear here…"
+editable = false
+
+[node name="Fetch" type="VBoxContainer" parent="MarginContainer/VBox/TabContainer" unique_id=663145531]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 1
+
+[node name="BBoxLabel" type="Label" parent="MarginContainer/VBox/TabContainer/Fetch" unique_id=1267623361]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Bounding Box (decimal degrees)"
+
+[node name="Grid" type="GridContainer" parent="MarginContainer/VBox/TabContainer/Fetch" unique_id=213843937]
+layout_mode = 2
+columns = 2
+
+[node name="Label_MinLon" type="Label" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=2106274961]
+layout_mode = 2
+text = "Min Lon:"
+
+[node name="MinLon" type="SpinBox" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=1798823575]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -180.0
+max_value = 180.0
+step = 0.0001
+value = -105.0
+
+[node name="Label_MaxLon" type="Label" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=1396589320]
+layout_mode = 2
+text = "Max Lon:"
+
+[node name="MaxLon" type="SpinBox" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=1189187037]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -180.0
+max_value = 180.0
+step = 0.0001
+value = -104.9
+
+[node name="Label_MinLat" type="Label" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=2038415461]
+layout_mode = 2
+text = "Min Lat:"
+
+[node name="MinLat" type="SpinBox" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=792079208]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -90.0
+max_value = 90.0
+step = 0.0001
+value = 39.69999999999999
+
+[node name="Label_MaxLat" type="Label" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=1705554433]
+layout_mode = 2
+text = "Max Lat:"
+
+[node name="MaxLat" type="SpinBox" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=1265522662]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = -90.0
+max_value = 90.0
+step = 0.0001
+value = 39.80000000000001
+
+[node name="Label_Output" type="Label" parent="MarginContainer/VBox/TabContainer/Fetch" unique_id=906503789]
+layout_mode = 2
+text = "Output Directory:"
+
+[node name="OutputDir" type="LineEdit" parent="MarginContainer/VBox/TabContainer/Fetch" unique_id=361338328]
+layout_mode = 2
+placeholder_text = "/path/to/output"
+
+[node name="BrowseBtn" type="Button" parent="MarginContainer/VBox/TabContainer/Fetch" unique_id=970387967]
+layout_mode = 2
+text = "Browse…"
+
+[node name="FetchBtn" type="Button" parent="MarginContainer/VBox/TabContainer/Fetch" unique_id=1980386917]
+layout_mode = 2
+text = "Fetch Terrain Data"
+
+[node name="Combine" type="VBoxContainer" parent="MarginContainer/VBox/TabContainer" unique_id=1875908247]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 2
+
+[node name="Label_Tiles" type="Label" parent="MarginContainer/VBox/TabContainer/Combine" unique_id=1481338173]
+layout_mode = 2
+text = "EXR Tiles to Combine:"
+
+[node name="TileList" type="ItemList" parent="MarginContainer/VBox/TabContainer/Combine" unique_id=488224736]
+custom_minimum_size = Vector2(0, 150)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="AddTileBtn" type="Button" parent="MarginContainer/VBox/TabContainer/Combine" unique_id=1954282424]
+layout_mode = 2
+text = "Add Tile(s)…"
+
+[node name="CombineBtn" type="Button" parent="MarginContainer/VBox/TabContainer/Combine" unique_id=1565872331]
+layout_mode = 2
+text = "Combine Tiles"
+
+[node name="StatusBar" type="HBoxContainer" parent="MarginContainer/VBox" unique_id=1307458043]
+layout_mode = 2
+
+[node name="StatusLabel" type="Label" parent="MarginContainer/VBox/StatusBar" unique_id=937347376]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Ready."
+clip_text = true
+
+[node name="ProgressBar" type="ProgressBar" parent="MarginContainer/VBox/StatusBar" unique_id=2111261432]
+visible = false
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
