@@ -2,7 +2,7 @@
 extends Node
 
 ## Wraps OS.execute() calls to the Python helper scripts in the python/ subfolder.
-## All methods are synchronous (blocking) — call from a thread if needed in the future.
+## Downloads are shown in a visible terminal window so the user can see progress.
 
 const PYTHON_CANDIDATES := ["python3", "python"]
 
@@ -51,7 +51,8 @@ func install_dependencies() -> Dictionary:
 	return {"success": code == 0, "message": msg}
 
 
-## Download a list of URLs to a directory, then convert DEMs → EXR and imagery → PNG.
+## Download and process DEM + imagery tiles.
+## Opens a visible terminal window so the user can watch progress.
 ## Returns {"success": bool, "output_path": String, "error": String}
 func process_tiles(dem_urls: Array, imagery_urls: Array, out_dir: String) -> Dictionary:
 	var python := find_python()
@@ -59,24 +60,70 @@ func process_tiles(dem_urls: Array, imagery_urls: Array, out_dir: String) -> Dic
 		return {"success": false, "error": "Python 3 not found. Please install Python 3."}
 
 	var script_dir := _script_dir()
-
 	var dem_list_path     := out_dir.path_join("_dem_urls.txt")
 	var imagery_list_path := out_dir.path_join("_imagery_urls.txt")
 	_write_lines(dem_list_path, dem_urls)
 	_write_lines(imagery_list_path, imagery_urls)
 
-	var dem_result: Dictionary = _run_python(python, script_dir.path_join("process_dem.py"),
-		["--url-list", dem_list_path, "--out-dir", out_dir])
-	if not dem_result.get("success", false):
-		return dem_result
+	# Write a combined runner script that runs both steps and pauses at the end.
+	var runner_path := out_dir.path_join("_run_fetch.bat")
+	var runner_content := (
+		"@echo off\n" +
+		"echo ============================================\n" +
+		"echo  Terrain Map Fetcher — DEM Download\n" +
+		"echo ============================================\n" +
+		'"%s" "%s" --url-list "%s" --out-dir "%s"\n' % [
+			python,
+			script_dir.path_join("process_dem.py"),
+			dem_list_path,
+			out_dir
+		] +
+		"if errorlevel 1 (\n" +
+		"  echo.\n" +
+		"  echo ERROR: DEM processing failed.\n" +
+		"  pause\n" +
+		"  exit /b 1\n" +
+		")\n" +
+		"echo.\n" +
+		"echo ============================================\n" +
+		"echo  Terrain Map Fetcher — Imagery Download\n" +
+		"echo ============================================\n" +
+		'"%s" "%s" --url-list "%s" --out-dir "%s"\n' % [
+			python,
+			script_dir.path_join("process_imagery.py"),
+			imagery_list_path,
+			out_dir
+		] +
+		"if errorlevel 1 (\n" +
+		"  echo.\n" +
+		"  echo ERROR: Imagery processing failed.\n" +
+		"  pause\n" +
+		"  exit /b 1\n" +
+		")\n" +
+		"echo.\n" +
+		"echo ============================================\n" +
+		"echo  ALL DONE! You can close this window.\n" +
+		"echo ============================================\n" +
+		"pause\n"
+	)
 
-	var img_result: Dictionary = _run_python(python, script_dir.path_join("process_imagery.py"),
-		["--url-list", imagery_list_path, "--out-dir", out_dir])
-	if not img_result.get("success", false):
-		return img_result
+	var file := FileAccess.open(runner_path, FileAccess.WRITE)
+	if file:
+		file.store_string(runner_content)
+		file.close()
+	else:
+		return {"success": false, "error": "Could not write runner script to output directory."}
 
+	# Launch the .bat in a new visible terminal window and wait for it to finish.
+	var code := OS.execute("cmd.exe", ["/c", "start", "/wait", "cmd.exe", "/c", runner_path], [], true)
+
+	# Clean up temp files.
 	DirAccess.remove_absolute(dem_list_path)
 	DirAccess.remove_absolute(imagery_list_path)
+	DirAccess.remove_absolute(runner_path)
+
+	if code != 0:
+		return {"success": false, "error": "Processing failed. Check the terminal output for details."}
 
 	return {"success": true, "output_path": out_dir, "error": ""}
 
@@ -92,22 +139,51 @@ func combine_tiles(tile_paths: Array, out_dir: String) -> Dictionary:
 	var tile_list_path := out_dir.path_join("_tile_list.txt")
 	_write_lines(tile_list_path, tile_paths)
 
-	var result: Dictionary = _run_python(python, script_dir.path_join("combine_tiles.py"),
-		["--tile-list", tile_list_path, "--out-dir", out_dir])
+	var runner_path := out_dir.path_join("_run_combine.bat")
+	var runner_content := (
+		"@echo off\n" +
+		"echo ============================================\n" +
+		"echo  Terrain Map Fetcher — Combining Tiles\n" +
+		"echo ============================================\n" +
+		'"%s" "%s" --tile-list "%s" --out-dir "%s"\n' % [
+			python,
+			script_dir.path_join("combine_tiles.py"),
+			tile_list_path,
+			out_dir
+		] +
+		"if errorlevel 1 (\n" +
+		"  echo.\n" +
+		"  echo ERROR: Combine failed.\n" +
+		"  pause\n" +
+		"  exit /b 1\n" +
+		")\n" +
+		"echo.\n" +
+		"echo ============================================\n" +
+		"echo  ALL DONE! You can close this window.\n" +
+		"echo ============================================\n" +
+		"pause\n"
+	)
 
+	var file := FileAccess.open(runner_path, FileAccess.WRITE)
+	if file:
+		file.store_string(runner_content)
+		file.close()
+	else:
+		return {"success": false, "error": "Could not write runner script to output directory."}
+
+	var result: Dictionary = _run_visible(runner_path)
 	DirAccess.remove_absolute(tile_list_path)
+	DirAccess.remove_absolute(runner_path)
 	return result
 
 
-# ── Private helpers ──────────────────────────────────────────────────────────
+# ── Private helpers ───────────────────────────────────────────────────────────
 
-func _run_python(python: String, script: String, args: Array) -> Dictionary:
-	var all_args := [script] + args
-	var out      := []
-	var code     := OS.execute(python, all_args, out, true)
-	var output   := "\n".join(out)
+func _run_visible(bat_path: String) -> Dictionary:
+	## Launch a .bat file in a visible cmd window and wait for it to finish.
+	var code := OS.execute("cmd.exe", ["/c", "start", "/wait", "cmd.exe", "/c", bat_path], [], true)
 	if code != 0:
-		return {"success": false, "error": "Script exited with code %d:\n%s" % [code, output]}
+		return {"success": false, "error": "Script failed. Check the terminal for details."}
 	return {"success": true, "output_path": "", "error": ""}
 
 

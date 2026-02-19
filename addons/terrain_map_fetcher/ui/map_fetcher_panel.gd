@@ -4,13 +4,13 @@ extends Control
 ## Reference back to the EditorPlugin so we can call helper methods.
 var plugin: EditorPlugin
 
-@onready var _tab_container: TabContainer     = $MarginContainer/VBox/TabContainer
-@onready var _status_label: Label             = $MarginContainer/VBox/StatusBar/StatusLabel
-@onready var _progress_bar: ProgressBar       = $MarginContainer/VBox/StatusBar/ProgressBar
+@onready var _tab_container: TabContainer      = $MarginContainer/VBox/TabContainer
+@onready var _status_label: Label              = $MarginContainer/VBox/StatusBar/StatusLabel
+@onready var _progress_bar: ProgressBar        = $MarginContainer/VBox/StatusBar/ProgressBar
 
 # ── Setup tab ────────────────────────────────────────────────────────────────
-@onready var _check_btn: Button   = $MarginContainer/VBox/TabContainer/Setup/CheckBtn
-@onready var _install_btn: Button = $MarginContainer/VBox/TabContainer/Setup/InstallBtn
+@onready var _check_btn: Button    = $MarginContainer/VBox/TabContainer/Setup/CheckBtn
+@onready var _install_btn: Button  = $MarginContainer/VBox/TabContainer/Setup/InstallBtn
 @onready var _dep_output: TextEdit = $MarginContainer/VBox/TabContainer/Setup/DepOutput
 
 # ── Fetch tab ────────────────────────────────────────────────────────────────
@@ -31,12 +31,20 @@ var _usgs_api: Node
 var _python_runner: Node
 var _is_busy: bool = false
 
+# Persistent file dialog — created once and reused.
+var _file_dialog: FileDialog
+
 
 func _ready() -> void:
 	_usgs_api      = load("res://addons/terrain_map_fetcher/core/usgs_api.gd").new()
 	_python_runner = load("res://addons/terrain_map_fetcher/core/python_runner.gd").new()
 	add_child(_usgs_api)
 	add_child(_python_runner)
+
+	# Create the file dialog once and add it to the tree.
+	_file_dialog = FileDialog.new()
+	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	add_child(_file_dialog)
 
 	_check_btn.pressed.connect(_on_check_pressed)
 	_install_btn.pressed.connect(_on_install_pressed)
@@ -77,6 +85,28 @@ func _get_bbox() -> Dictionary:
 	}
 
 
+func _open_file_dialog(mode: FileDialog.FileMode, filters: PackedStringArray,
+		on_file: Callable, on_dir: Callable = Callable()) -> void:
+	# Disconnect any previous signals to avoid stacking callbacks.
+	if _file_dialog.file_selected.is_connected(on_file) == false:
+		for conn in _file_dialog.file_selected.get_connections():
+			_file_dialog.file_selected.disconnect(conn["callable"])
+	for conn in _file_dialog.dir_selected.get_connections():
+		_file_dialog.dir_selected.disconnect(conn["callable"])
+	for conn in _file_dialog.files_selected.get_connections():
+		_file_dialog.files_selected.disconnect(conn["callable"])
+
+	_file_dialog.file_mode = mode
+	_file_dialog.filters   = filters
+
+	if on_dir.is_valid():
+		_file_dialog.dir_selected.connect(on_dir, CONNECT_ONE_SHOT)
+	if on_file.is_valid():
+		_file_dialog.file_selected.connect(on_file, CONNECT_ONE_SHOT)
+
+	_file_dialog.popup_centered_ratio(0.6)
+
+
 # ── Setup tab handlers ────────────────────────────────────────────────────────
 
 func _on_check_pressed() -> void:
@@ -108,15 +138,13 @@ func _on_install_pressed() -> void:
 # ── Fetch tab handlers ────────────────────────────────────────────────────────
 
 func _on_browse_pressed() -> void:
-	var dialog := EditorFileDialog.new()
-	dialog.file_mode = EditorFileDialog.FILE_MODE_OPEN_DIR
-	dialog.access    = EditorFileDialog.ACCESS_FILESYSTEM
-	dialog.dir_selected.connect(func(path: String) -> void:
-		_output_dir.text = path
-		dialog.queue_free()
+	_open_file_dialog(
+		FileDialog.FILE_MODE_OPEN_DIR,
+		PackedStringArray(),
+		Callable(),
+		func(path: String) -> void:
+			_output_dir.text = path
 	)
-	add_child(dialog)
-	dialog.popup_centered_ratio(0.6)
 
 
 func _on_fetch_pressed() -> void:
@@ -134,18 +162,16 @@ func _on_fetch_pressed() -> void:
 	_usgs_api.fetch_dem_and_imagery(bbox, out_dir)
 
 
+# ── Combine tab handlers ──────────────────────────────────────────────────────
+
 func _on_add_tile_pressed() -> void:
-	var dialog := EditorFileDialog.new()
-	dialog.file_mode = EditorFileDialog.FILE_MODE_OPEN_FILES
-	dialog.access    = EditorFileDialog.ACCESS_FILESYSTEM
-	dialog.add_filter("*.exr", "EXR Heightmaps")
-	dialog.files_selected.connect(func(paths: PackedStringArray) -> void:
-		for p in paths:
-			_tile_list.add_item(p)
-		dialog.queue_free()
+	_open_file_dialog(
+		FileDialog.FILE_MODE_OPEN_FILES,
+		PackedStringArray(["*.exr ; EXR Heightmaps"]),
+		func(path: String) -> void:
+			_tile_list.add_item(path),
+		Callable()
 	)
-	add_child(dialog)
-	dialog.popup_centered_ratio(0.6)
 
 
 func _on_combine_pressed() -> void:

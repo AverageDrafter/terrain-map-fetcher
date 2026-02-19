@@ -82,7 +82,7 @@ size_flags_horizontal = 3
 min_value = -180.0
 max_value = 180.0
 step = 0.0001
-value = -105.0
+value = -105.08
 
 [node name="Label_MaxLon" type="Label" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=1396589320]
 layout_mode = 2
@@ -94,7 +94,7 @@ size_flags_horizontal = 3
 min_value = -180.0
 max_value = 180.0
 step = 0.0001
-value = -104.9
+value = -104.92
 
 [node name="Label_MinLat" type="Label" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=2038415461]
 layout_mode = 2
@@ -106,7 +106,7 @@ size_flags_horizontal = 3
 min_value = -90.0
 max_value = 90.0
 step = 0.0001
-value = 39.69999999999999
+value = 38.879999999999995
 
 [node name="Label_MaxLat" type="Label" parent="MarginContainer/VBox/TabContainer/Fetch/Grid" unique_id=1705554433]
 layout_mode = 2
@@ -118,7 +118,7 @@ size_flags_horizontal = 3
 min_value = -90.0
 max_value = 90.0
 step = 0.0001
-value = 39.80000000000001
+value = 39.78
 
 [node name="Label_Output" type="Label" parent="MarginContainer/VBox/TabContainer/Fetch" unique_id=906503789]
 layout_mode = 2
