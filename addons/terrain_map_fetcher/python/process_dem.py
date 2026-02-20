@@ -2,300 +2,365 @@
 """
 process_dem.py
 --------------
-Downloads USGS 3DEP GeoTIFF DEM files and converts them to
-Terrain3D-compatible EXR heightmaps.
-
-EXR spec required by Terrain3D:
-  - RGB (not greyscale)
-  - 32-bit float
-  - No alpha / transparency
-  - Values are real-world meters (not normalized)
-  - 1 pixel = 1 meter lateral resolution
+Downloads USGS 3DEP GeoTIFF tiles, crops them to the requested bounding box,
+stitches them into a single seamless heightmap, and exports as a
+Terrain3D-compatible EXR (RGB 32-bit float, real meter values).
 
 Usage:
-    python3 process_dem.py --url-list /path/to/urls.txt --out-dir /path/to/output
+    python3 process_dem.py --url-list /path/to/urls.txt \
+                           --out-dir /path/to/output \
+                           --bbox MIN_LON MIN_LAT MAX_LON MAX_LAT
 """
 
 import argparse
+import re
 import sys
-import os
-import struct
+import tempfile
 import urllib.request
 import urllib.error
-import traceback
-import tempfile
 from pathlib import Path
 
 import numpy as np
 
-# Rasterio is used for reading GeoTIFFs and reprojecting to UTM (meters).
 try:
     import rasterio
     from rasterio.warp import calculate_default_transform, reproject, Resampling
     from rasterio.crs import CRS
+    from rasterio.merge import merge as rasterio_merge
+    from rasterio.mask import mask as rasterio_mask
+    from rasterio.transform import from_bounds
+    import rasterio.transform
+    from shapely.geometry import box as shapely_box
 except ImportError:
-    print("ERROR: rasterio is not installed. Run setup.py --install first.", file=sys.stderr)
+    print("ERROR: rasterio/shapely not installed. Run setup.py --install first.", file=sys.stderr)
     sys.exit(1)
 
-# OpenEXR for writing the final heightmap.
 try:
     import OpenEXR
     import Imath
 except ImportError:
-    print("ERROR: OpenEXR is not installed. Run setup.py --install first.", file=sys.stderr)
+    print("ERROR: OpenEXR not installed. Run setup.py --install first.", file=sys.stderr)
     sys.exit(1)
 
+CHUNK_SIZE   = 1024 * 256   # 256 KB download chunks
+MAX_PIX_SIZE = 4096         # cap output at 4096px per side
+REGION_SIZE  = 1024         # Terrain3D region size — output must be a multiple of this
 
-# ── Constants ────────────────────────────────────────────────────────────────
-
-# USGS NoData value in 3DEP products.
-NODATA_VALUE = -9999.0
-
-# Maximum output resolution per tile (pixels). Downscale if larger.
-# 4096x4096 is a good balance between detail and VRAM usage in Terrain3D.
-MAX_TILE_SIZE = 4096
-
-
-# ── Entry point ──────────────────────────────────────────────────────────────
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Convert USGS DEM GeoTIFFs to EXR heightmaps.")
-    parser.add_argument("--url-list", required=True, help="Path to a text file with one download URL per line.")
-    parser.add_argument("--out-dir",  required=True, help="Directory where EXR files will be saved.")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--url-list", required=True)
+    parser.add_argument("--out-dir",  required=True)
+    parser.add_argument("--bbox",     required=True, nargs=4, type=float,
+                        metavar=("MIN_LON", "MIN_LAT", "MAX_LON", "MAX_LAT"))
     args = parser.parse_args()
 
-    url_list_path = Path(args.url_list)
-    out_dir       = Path(args.out_dir)
-
-    if not url_list_path.exists():
-        print(f"ERROR: URL list not found: {url_list_path}", file=sys.stderr)
-        sys.exit(1)
-
+    out_dir  = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    urls     = [l.strip() for l in Path(args.url_list).read_text().splitlines() if l.strip()]
+    bbox_wgs = tuple(args.bbox)   # (min_lon, min_lat, max_lon, max_lat)
 
-    urls = [line.strip() for line in url_list_path.read_text().splitlines() if line.strip()]
-    if not urls:
-        print("ERROR: URL list is empty.", file=sys.stderr)
-        sys.exit(1)
+    if _is_cached(out_dir, bbox_wgs):
+        print("Cache hit — bbox unchanged, skipping DEM download.")
+        return
 
     print(f"Processing {len(urls)} DEM tile(s)…")
-    errors = []
+    print(f"Requested bbox: {bbox_wgs}")
 
-    for i, url in enumerate(urls):
-        tile_name = f"heightmap_{i:03d}"
-        print(f"\n[{i+1}/{len(urls)}] {tile_name}")
-        print(f"  Downloading: {url}")
+    tmp_files: list[Path] = []
 
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-
-            _download_file(url, tmp_path)
-            print(f"  Download complete ({tmp_path.stat().st_size / 1024 / 1024:.1f} MB)")
-
-            out_path = out_dir / f"{tile_name}.exr"
-            meta = _convert_dem_to_exr(tmp_path, out_path)
-
-            print(f"  ✓ Saved: {out_path.name}")
-            print(f"    Size:      {meta['width']}x{meta['height']} px")
-            print(f"    Elevation: {meta['min_elev']:.1f}m – {meta['max_elev']:.1f}m")
-            print(f"    CRS:       {meta['crs']}")
-
-            # Write a companion metadata file so Godot/user knows the real-world values.
-            _write_metadata(out_dir / f"{tile_name}_meta.txt", url, meta)
-
-        except Exception as exc:
-            msg = f"  ✗ Failed: {exc}"
-            print(msg, file=sys.stderr)
-            traceback.print_exc()
-            errors.append((url, str(exc)))
-        finally:
-            if 'tmp_path' in locals() and tmp_path.exists():
-                tmp_path.unlink()
-
-    if errors:
-        print(f"\n{len(errors)} tile(s) failed:")
-        for url, err in errors:
-            print(f"  {url}\n    → {err}")
-        sys.exit(1)
-
-    print(f"\nAll {len(urls)} tile(s) processed successfully.")
-    print(f"Output: {out_dir}")
-
-
-# ── Download ─────────────────────────────────────────────────────────────────
-
-def _download_file(url: str, dest: Path) -> None:
-    """Download a URL to dest, showing progress."""
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "TerrainMapFetcher/0.1"})
-        with urllib.request.urlopen(req, timeout=120) as response:
-            total = int(response.headers.get("Content-Length", 0))
-            downloaded = 0
-            chunk_size = 1024 * 256  # 256 KB
+        # ── Step 1: Download all tiles ────────────────────────────────────────
+        downloaded: list[Path] = []
+        for i, url in enumerate(urls):
+            print(f"\n[{i+1}/{len(urls)}] Downloading: {url}")
+            tmp = Path(tempfile.mktemp(suffix=".tif"))
+            tmp_files.append(tmp)
+            _download(url, tmp)
+            print(f"  Download complete ({tmp.stat().st_size / 1024 / 1024:.1f} MB)")
+            downloaded.append(tmp)
 
+        # ── Step 2: Reproject each tile to UTM and crop to bbox ───────────────
+        utm_crs   = _detect_utm_crs(downloaded[0], bbox_wgs)
+        bbox_utm  = _wgs84_bbox_to_utm(bbox_wgs, utm_crs)
+        print(f"\nTarget CRS: {utm_crs}")
+        print(f"Bbox in UTM: {[f'{v:.0f}' for v in bbox_utm]}")
+
+        cropped: list[Path] = []
+        for i, src_path in enumerate(downloaded):
+            out_path = Path(tempfile.mktemp(suffix=".tif"))
+            tmp_files.append(out_path)
+            if _reproject_and_crop(src_path, out_path, utm_crs, bbox_utm):
+                cropped.append(out_path)
+                print(f"  [{i+1}/{len(downloaded)}] Cropped OK")
+            else:
+                print(f"  [{i+1}/{len(downloaded)}] No overlap with bbox — skipped")
+
+        if not cropped:
+            print("ERROR: No tiles overlapped the requested bbox.", file=sys.stderr)
+            sys.exit(1)
+
+        # ── Step 3: Merge cropped tiles into one mosaic ───────────────────────
+        print(f"\nMerging {len(cropped)} cropped tile(s)…")
+        mosaic_path = Path(tempfile.mktemp(suffix=".tif"))
+        tmp_files.append(mosaic_path)
+        _merge_tiles(cropped, mosaic_path)
+
+        # ── Step 4: Write EXR ─────────────────────────────────────────────────
+        exr_path  = out_dir / "heightmap_000.exr"
+        meta      = _write_exr(mosaic_path, exr_path)
+
+        print(f"\n✓ Saved: {exr_path.name}")
+        print(f"  Size:      {meta['width']}x{meta['height']} px")
+        print(f"  Elevation: {meta['min_elev']:.1f}m – {meta['max_elev']:.1f}m")
+        print(f"  CRS:       {utm_crs}")
+        print(f"  Coverage:  {meta['coverage_km_x']:.1f} x {meta['coverage_km_y']:.1f} km")
+
+        _write_meta(out_dir / "heightmap_000_meta.txt", meta, utm_crs, bbox_wgs, bbox_utm)
+        print("\nDEM processing complete.")
+
+    finally:
+        for p in tmp_files:
+            try:
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                pass
+
+
+# ── Cache check ───────────────────────────────────────────────────────────────
+
+def _is_cached(out_dir: Path, bbox_wgs: tuple) -> bool:
+    """Return True if existing outputs were produced from the same bbox."""
+    exr  = out_dir / "heightmap_000.exr"
+    meta = out_dir / "heightmap_000_meta.txt"
+    if not exr.exists() or not meta.exists():
+        return False
+    for line in meta.read_text().splitlines():
+        m = re.match(r"Bbox \(WGS84\):\s+\(([^)]+)\)", line)
+        if m:
+            stored = tuple(float(x) for x in m.group(1).split(","))
+            return all(abs(a - b) < 1e-4 for a, b in zip(stored, bbox_wgs))
+    return False
+
+
+# ── Download ──────────────────────────────────────────────────────────────────
+
+def _download(url: str, dest: Path) -> None:
+    req = urllib.request.Request(url, headers={"User-Agent": "TerrainMapFetcher/0.1"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            total = int(r.headers.get("Content-Length", 0))
+            done  = 0
             with open(dest, "wb") as f:
-                while True:
-                    chunk = response.read(chunk_size)
-                    if not chunk:
-                        break
+                while chunk := r.read(CHUNK_SIZE):
                     f.write(chunk)
-                    downloaded += len(chunk)
+                    done += len(chunk)
                     if total:
-                        pct = downloaded / total * 100
-                        print(f"  {pct:.0f}%", end="\r", flush=True)
-
+                        print(f"  {done/total*100:.0f}%", end="\r", flush=True)
     except urllib.error.URLError as e:
         raise RuntimeError(f"Download failed: {e.reason}") from e
 
 
-# ── GeoTIFF → EXR conversion ─────────────────────────────────────────────────
+# ── CRS helpers ───────────────────────────────────────────────────────────────
 
-def _convert_dem_to_exr(tif_path: Path, exr_path: Path) -> dict:
-    """
-    Read a GeoTIFF DEM, reproject to a metric UTM CRS so that
-    1 pixel ≈ 1 meter, clamp NoData, then write as RGB 32-bit float EXR.
-
-    Returns a metadata dict with width, height, min/max elevation, and CRS.
-    """
-    with rasterio.open(tif_path) as src:
-        src_crs   = src.crs
-        src_nodata = src.nodata if src.nodata is not None else NODATA_VALUE
-
-        # ── Reproject to UTM so pixel size is in meters ──────────────────────
-        # Pick the best UTM zone automatically from the source bounds.
-        utm_crs = _best_utm_crs(src)
-        transform, width, height = calculate_default_transform(
-            src_crs, utm_crs,
-            src.width, src.height,
-            *src.bounds
-        )
-
-        # Clamp to MAX_TILE_SIZE to avoid huge files.
-        scale = 1.0
-        if width > MAX_TILE_SIZE or height > MAX_TILE_SIZE:
-            scale  = MAX_TILE_SIZE / max(width, height)
-            width  = int(width  * scale)
-            height = int(height * scale)
-            transform = transform * transform.scale(1 / scale, 1 / scale)
-            print(f"  Downscaling to {width}x{height} (scale={scale:.3f})")
-
-        # Allocate output array.
-        elevation = np.empty((height, width), dtype=np.float32)
-
-        reproject(
-            source      = rasterio.band(src, 1),
-            destination = elevation,
-            src_transform  = src.transform,
-            src_crs        = src_crs,
-            src_nodata     = src_nodata,
-            dst_transform  = transform,
-            dst_crs        = utm_crs,
-            dst_nodata     = NODATA_VALUE,
-            resampling     = Resampling.bilinear,
-        )
-
-    # ── Clean NoData ─────────────────────────────────────────────────────────
-    nodata_mask = (elevation <= NODATA_VALUE + 1.0) | ~np.isfinite(elevation)
-    if nodata_mask.any():
-        # Fill NoData with the median of valid pixels to avoid cliffs at edges.
-        valid = elevation[~nodata_mask]
-        fill_value = float(np.median(valid)) if valid.size > 0 else 0.0
-        elevation[nodata_mask] = fill_value
-        print(f"  Filled {nodata_mask.sum()} NoData pixels with median ({fill_value:.1f}m)")
-
-    min_elev = float(elevation.min())
-    max_elev = float(elevation.max())
-
-    # ── Write EXR ────────────────────────────────────────────────────────────
-    # Terrain3D requires: RGB, 32-bit float, no alpha.
-    # We store the real elevation value in all three channels (R=G=B=height).
-    # This is the standard approach — Terrain3D reads the R channel for height.
-    _write_exr_rgb32(elevation, exr_path)
-
-    return {
-        "width":    width,
-        "height":   height,
-        "min_elev": min_elev,
-        "max_elev": max_elev,
-        "crs":      str(utm_crs),
-        "scale":    scale,
-    }
-
-
-def _best_utm_crs(src: rasterio.DatasetReader) -> CRS:
-    """
-    Determine the best UTM CRS for the source dataset based on its center longitude.
-    Always uses WGS84 datum.
-    """
-    bounds = src.bounds
-    # Transform bounds to WGS84 if not already geographic.
-    if not src.crs.is_geographic:
-        from rasterio.warp import transform_bounds
-        bounds = transform_bounds(src.crs, CRS.from_epsg(4326), *bounds)
-
-    center_lon = (bounds[0] + bounds[2]) / 2.0
-    center_lat = (bounds[1] + bounds[3]) / 2.0
-
-    zone   = int((center_lon + 180) / 6) + 1
-    # UTM North: EPSG 326XX, South: EPSG 327XX
-    epsg   = 32600 + zone if center_lat >= 0 else 32700 + zone
+def _detect_utm_crs(src_path: Path, bbox_wgs: tuple) -> CRS:
+    """Pick UTM zone from the center of the requested bbox."""
+    center_lon = (bbox_wgs[0] + bbox_wgs[2]) / 2.0
+    center_lat = (bbox_wgs[1] + bbox_wgs[3]) / 2.0
+    zone = int((center_lon + 180) / 6) + 1
+    epsg = 32600 + zone if center_lat >= 0 else 32700 + zone
     return CRS.from_epsg(epsg)
 
 
-def _write_exr_rgb32(elevation: np.ndarray, out_path: Path) -> None:
-    """
-    Write a 2D float32 numpy array as an RGB 32-bit float EXR.
-    R = G = B = elevation value (meters).
-    No alpha channel.
-    """
-    height, width = elevation.shape
+def _wgs84_bbox_to_utm(bbox_wgs: tuple, utm_crs: CRS) -> tuple:
+    """Convert WGS84 bbox corners to UTM coordinates."""
+    from rasterio.warp import transform as warp_transform
+    wgs84 = CRS.from_epsg(4326)
+    min_lon, min_lat, max_lon, max_lat = bbox_wgs
+    xs, ys = warp_transform(wgs84, utm_crs,
+                            [min_lon, max_lon],
+                            [min_lat, max_lat])
+    return (min(xs), min(ys), max(xs), max(ys))
 
-    # Flatten to bytes — OpenEXR expects each channel as a bytes object.
-    channel_bytes = elevation.astype(np.float32).tobytes()
 
-    header = OpenEXR.Header(width, height)
-    header["channels"] = {
-        "R": Imath.Channel(Imath.PixelType(Imath.PixelType.FLOAT)),
-        "G": Imath.Channel(Imath.PixelType(Imath.PixelType.FLOAT)),
-        "B": Imath.Channel(Imath.PixelType(Imath.PixelType.FLOAT)),
+# ── Reproject + crop ──────────────────────────────────────────────────────────
+
+def _reproject_and_crop(src_path: Path, dst_path: Path,
+                        utm_crs: CRS, bbox_utm: tuple) -> bool:
+    """
+    Reproject tile to UTM, fill NoData, then crop to bbox_utm.
+    Returns False if the tile has no overlap with bbox_utm.
+    """
+    with rasterio.open(src_path) as src:
+        transform, width, height = calculate_default_transform(
+            src.crs, utm_crs, src.width, src.height, *src.bounds)
+
+        profile = src.profile.copy()
+        profile.update(crs=utm_crs, transform=transform,
+                       width=width, height=height,
+                       driver="GTiff", dtype="float32", count=1,
+                       nodata=np.nan)
+
+        reproj_tmp = Path(tempfile.mktemp(suffix=".tif"))
+        try:
+            with rasterio.open(reproj_tmp, "w", **profile) as dst:
+                data = np.empty((height, width), dtype=np.float32)
+                reproject(
+                    source=rasterio.band(src, 1),
+                    destination=data,
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=transform,
+                    dst_crs=utm_crs,
+                    resampling=Resampling.bilinear,
+                )
+                # Fill nodata with median to avoid edge cliffs.
+                # NOTE: np.isnan() is required — (data == np.nan) is always False
+                # in IEEE 754, so NaN pixels would silently survive without it.
+                nodata_val = src.nodata if src.nodata is not None else -9999
+                mask = np.isnan(data) | (data == nodata_val) | (data < -1000)
+                if mask.any():
+                    median = float(np.median(data[~mask])) if (~mask).any() else 0.0
+                    data[mask] = median
+                    print(f"  Filled {mask.sum()} NoData pixels with median ({median:.1f}m)")
+                dst.write(data, 1)
+
+            # Now crop to bbox.
+            with rasterio.open(reproj_tmp) as reproj:
+                # Check overlap.
+                tile_bounds = reproj.bounds
+                if (bbox_utm[2] < tile_bounds.left  or bbox_utm[0] > tile_bounds.right or
+                    bbox_utm[3] < tile_bounds.bottom or bbox_utm[1] > tile_bounds.top):
+                    return False
+
+                crop_shape = [shapely_box(*bbox_utm).__geo_interface__]
+                cropped_data, cropped_transform = rasterio_mask(
+                    reproj, crop_shape, crop=True, filled=True, nodata=np.nan)
+
+                crop_profile = reproj.profile.copy()
+                crop_profile.update(
+                    transform=cropped_transform,
+                    width=cropped_data.shape[2],
+                    height=cropped_data.shape[1])
+
+                with rasterio.open(dst_path, "w", **crop_profile) as out:
+                    out.write(cropped_data)
+            return True
+        finally:
+            if reproj_tmp.exists():
+                reproj_tmp.unlink()
+
+
+# ── Merge ─────────────────────────────────────────────────────────────────────
+
+def _merge_tiles(tile_paths: list[Path], out_path: Path) -> None:
+    datasets = [rasterio.open(p) for p in tile_paths]
+    try:
+        mosaic, transform = rasterio_merge(datasets, method="first")
+        profile = datasets[0].profile.copy()
+        profile.update(transform=transform,
+                       width=mosaic.shape[2],
+                       height=mosaic.shape[1])
+        with rasterio.open(out_path, "w", **profile) as dst:
+            dst.write(mosaic)
+    finally:
+        for ds in datasets:
+            ds.close()
+
+
+# ── EXR export ────────────────────────────────────────────────────────────────
+
+def _write_exr(src_path: Path, exr_path: Path) -> dict:
+    with rasterio.open(src_path) as src:
+        native_h, native_w = src.height, src.width
+
+        # Proportional scale if native dimensions exceed the 4096 cap.
+        if native_w > MAX_PIX_SIZE or native_h > MAX_PIX_SIZE:
+            scale = MAX_PIX_SIZE / max(native_w, native_h)
+            base_w = int(native_w * scale)
+            base_h = int(native_h * scale)
+        else:
+            base_w, base_h = native_w, native_h
+
+        # Snap UP to next multiple of REGION_SIZE.
+        target_w = ((base_w + REGION_SIZE - 1) // REGION_SIZE) * REGION_SIZE
+        target_h = ((base_h + REGION_SIZE - 1) // REGION_SIZE) * REGION_SIZE
+
+        # Single read+resample — rasterio bilinear-interpolates all real data to
+        # fill the target dimensions. No padding, no flat shelf.
+        data = src.read(
+            1,
+            out_shape=(target_h, target_w),
+            resampling=Resampling.bilinear,
+        ).astype(np.float32)
+        h, w = target_h, target_w
+
+        # Safety net: fill any NaN that survived the per-tile fill or the merge.
+        nan_count = int(np.isnan(data).sum())
+        if nan_count > 0:
+            median = float(np.nanmedian(data))
+            data = np.where(np.isnan(data), median, data)
+            print(f"  Filled {nan_count} residual NaN pixels with median ({median:.1f}m)")
+
+        # Compute elevation stats.
+        min_elev = float(np.nanmin(data))
+        max_elev = float(np.nanmax(data))
+
+        # Resolution in meters per pixel (from the original, un-resampled transform).
+        transform = src.transform
+        res_x = abs(transform.a)
+        res_y = abs(transform.e)
+
+        coverage_km_x = w * res_x / 1000
+        coverage_km_y = h * res_y / 1000
+
+    # Write single-channel float EXR (R = elevation in real meters).
+    # Terrain3D's load_image reads the R channel for heightmaps.
+    header  = OpenEXR.Header(w, h)
+    channel = Imath.Channel(Imath.PixelType(Imath.PixelType.FLOAT))
+    header["channels"] = {"R": channel}
+    exr = OpenEXR.OutputFile(str(exr_path), header)
+    exr.writePixels({"R": data.tobytes()})
+    exr.close()
+
+    return {
+        "width":        w,
+        "height":       h,
+        "min_elev":     min_elev,
+        "max_elev":     max_elev,
+        "res_x":        res_x,
+        "res_y":        res_y,
+        "coverage_km_x": coverage_km_x,
+        "coverage_km_y": coverage_km_y,
     }
-    # Remove alpha if OpenEXR added it by default.
-    header.pop("A", None)
-
-    exr_file = OpenEXR.OutputFile(str(out_path), header)
-    exr_file.writePixels({
-        "R": channel_bytes,
-        "G": channel_bytes,
-        "B": channel_bytes,
-    })
-    exr_file.close()
 
 
-# ── Metadata helper ──────────────────────────────────────────────────────────
+# ── Metadata ──────────────────────────────────────────────────────────────────
 
-def _write_metadata(meta_path: Path, source_url: str, meta: dict) -> None:
-    """
-    Write a human-readable companion .txt file next to each EXR.
-    This lets you know the elevation range for Terrain3D import settings.
-    """
+def _write_meta(path: Path, meta: dict, crs: CRS, bbox_wgs: tuple, bbox_utm: tuple) -> None:
     lines = [
-        "Terrain Map Fetcher — DEM Tile Metadata",
+        "Terrain Map Fetcher — Heightmap Metadata",
         "=" * 40,
-        f"Source URL:    {source_url}",
-        f"Output size:   {meta['width']} x {meta['height']} pixels",
-        f"Min elevation: {meta['min_elev']:.2f} m",
-        f"Max elevation: {meta['max_elev']:.2f} m",
-        f"Elev range:    {meta['max_elev'] - meta['min_elev']:.2f} m",
-        f"Projected CRS: {meta['crs']}",
+        f"Output file:   heightmap_000.exr",
+        f"Size:          {meta['width']} x {meta['height']} px",
+        f"Resolution:    {meta['res_x']:.1f}m x {meta['res_y']:.1f}m per pixel",
+        f"Coverage:      {meta['coverage_km_x']:.2f} x {meta['coverage_km_y']:.2f} km",
+        f"Elevation:     {meta['min_elev']:.1f}m – {meta['max_elev']:.1f}m",
+        f"CRS:           {crs}",
+        f"Bbox (WGS84):  {bbox_wgs}",
+        f"Bbox (UTM):    {bbox_utm[0]:.1f} {bbox_utm[1]:.1f} {bbox_utm[2]:.1f} {bbox_utm[3]:.1f}",
         "",
-        "Terrain3D Import Notes:",
-        "  - EXR format: RGB 32-bit float, values in real meters",
-        "  - Height offset: set to your min_elevation value (or 0 if terrain is above sea level)",
-        f"  - Height scale:  set to {meta['max_elev'] - meta['min_elev']:.1f} (the elevation range)",
-        "  - 1 pixel = 1 meter (approx) — leave vertex_spacing at 1.0",
+        "Terrain3D Import Settings:",
+        "  Height Map:      heightmap_000.exr",
+        "  import_scale:    1  (real meter values, no normalization needed)",
+        f"  height_offset:   0  (or -{meta['min_elev']:.0f} to normalize min elev to y=0)",
+        f"  vertex_spacing:  {meta['res_x']:.0f}  (meters per pixel — set on the Terrain3D node)",
+        "",
+        "The imagery_000.png covers the exact same bbox and can be",
+        "used as the color map in Terrain3D.",
     ]
-    meta_path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines))
 
 
 if __name__ == "__main__":

@@ -1,15 +1,13 @@
 @tool
 extends Node
 
-signal request_completed(dem_urls: Array, imagery_urls: Array, out_dir: String)
+signal request_completed(dem_urls: Array, imagery_urls: Array, out_dir: String, bbox: Dictionary)
 signal request_failed(error_msg: String)
 
 const TNM_BASE    := "https://tnmaccess.nationalmap.gov/api/v1/products"
 const DATASET_DEM := "National Elevation Dataset (NED) 1 arc-second"
 
 # USGS NAIP Plus WMS — correct endpoint with MapServer, layer "0".
-const NAIP_WMS := "https://imagery.nationalmap.gov/arcgis/services/USGSNAIPImagery/ImageServer/WMSServer"
-
 var _http: HTTPRequest
 var _pending_out_dir: String
 var _pending_bbox: Dictionary
@@ -104,18 +102,19 @@ func _on_http_completed(result: int, response_code: int, _headers: PackedStringA
 	for u in _dem_urls:
 		print("  → ", u.get_file())
 
-	# ── Build NAIP WMS URL ────────────────────────────────────────────────────
+	# ── Build NAIP exportImage REST URL ─────────────────────────────────────
+	# Using USDA FSA service — more permissive than USGS for script access.
 	var bbox     := _pending_bbox
+	var bbox_str := "%s,%s,%s,%s" % [bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat]
 	var naip_url := (
-		NAIP_WMS +
-		"?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap" +
-		"&LAYERS=USGSNAIPImagery" +
-		"&STYLES=" +
-		"&SRS=EPSG:4326" +
-		"&BBOX=%s,%s,%s,%s" % [bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat] +
-		"&WIDTH=4096&HEIGHT=4096" +
-		"&FORMAT=image/png" +
-		"&TRANSPARENT=FALSE"
+		"https://gis.apfo.usda.gov/arcgis/rest/services/NAIP/USDA_CONUS_PRIME/ImageServer/exportImage" +
+		"?bbox=" + bbox_str +
+		"&bboxSR=4326" +
+		"&size=4096,4096" +
+		"&imageSR=4326" +
+		"&format=png" +
+		"&pixelType=U8" +
+		"&f=image"
 	)
-	print("[USGS API] NAIP WMS URL built.")
-	request_completed.emit(_dem_urls, [naip_url], _pending_out_dir)
+	print("[USGS API] NAIP exportImage URL built.")
+	request_completed.emit(_dem_urls, [naip_url], _pending_out_dir, _pending_bbox)

@@ -14,6 +14,7 @@ REQUIRED = {
     "PIL":      "Pillow>=10.0",
     "OpenEXR":  "OpenEXR>=1.3",
     "requests": "requests>=2.28",
+    "shapely":  "shapely>=2.0",
 }
 
 

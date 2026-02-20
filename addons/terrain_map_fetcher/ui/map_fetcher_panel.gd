@@ -193,9 +193,9 @@ func _on_combine_pressed() -> void:
 
 # ── API callbacks ─────────────────────────────────────────────────────────────
 
-func _on_api_request_completed(dem_urls: Array, imagery_urls: Array, out_dir: String) -> void:
+func _on_api_request_completed(dem_urls: Array, imagery_urls: Array, out_dir: String, bbox: Dictionary) -> void:
 	_set_status("Downloading %d DEM + %d imagery tile(s)…" % [dem_urls.size(), imagery_urls.size()])
-	var result: Dictionary = _python_runner.process_tiles(dem_urls, imagery_urls, out_dir)
+	var result: Dictionary = _python_runner.process_tiles(dem_urls, imagery_urls, out_dir, bbox)
 	_on_python_done(result)
 
 

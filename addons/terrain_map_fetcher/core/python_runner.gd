@@ -54,7 +54,7 @@ func install_dependencies() -> Dictionary:
 ## Download and process DEM + imagery tiles.
 ## Opens a visible terminal window so the user can watch progress.
 ## Returns {"success": bool, "output_path": String, "error": String}
-func process_tiles(dem_urls: Array, imagery_urls: Array, out_dir: String) -> Dictionary:
+func process_tiles(dem_urls: Array, imagery_urls: Array, out_dir: String, bbox: Dictionary = {}) -> Dictionary:
 	var python := find_python()
 	if python.is_empty():
 		return {"success": false, "error": "Python 3 not found. Please install Python 3."}
@@ -72,11 +72,15 @@ func process_tiles(dem_urls: Array, imagery_urls: Array, out_dir: String) -> Dic
 		"echo ============================================\n" +
 		"echo  Terrain Map Fetcher — DEM Download\n" +
 		"echo ============================================\n" +
-		'"%s" "%s" --url-list "%s" --out-dir "%s"\n' % [
+		'"%s" "%s" --url-list "%s" --out-dir "%s" --bbox %s %s %s %s\n' % [
 			python,
 			script_dir.path_join("process_dem.py"),
 			dem_list_path,
-			out_dir
+			out_dir,
+			bbox.get("min_lon", 0.0),
+			bbox.get("min_lat", 0.0),
+			bbox.get("max_lon", 0.0),
+			bbox.get("max_lat", 0.0)
 		] +
 		"if errorlevel 1 (\n" +
 		"  echo.\n" +
@@ -88,11 +92,15 @@ func process_tiles(dem_urls: Array, imagery_urls: Array, out_dir: String) -> Dic
 		"echo ============================================\n" +
 		"echo  Terrain Map Fetcher — Imagery Download\n" +
 		"echo ============================================\n" +
-		'"%s" "%s" --url-list "%s" --out-dir "%s"\n' % [
+		'"%s" "%s" --url-list "%s" --out-dir "%s" --bbox %s %s %s %s\n' % [
 			python,
 			script_dir.path_join("process_imagery.py"),
 			imagery_list_path,
-			out_dir
+			out_dir,
+			bbox.get("min_lon", 0.0),
+			bbox.get("min_lat", 0.0),
+			bbox.get("max_lon", 0.0),
+			bbox.get("max_lat", 0.0)
 		] +
 		"if errorlevel 1 (\n" +
 		"  echo.\n" +
