@@ -137,8 +137,9 @@ func process_tiles(dem_urls: Array, imagery_urls: Array, out_dir: String, bbox: 
 
 
 ## Composite all placed patches from a project into a merged EXR + imagery PNG.
+## max_resolution caps the longest output side (default 8192).
 ## Returns {"success": bool, "output_path": String, "error": String}
-func compose_canvas(project_dir: String, export_name: String) -> Dictionary:
+func compose_canvas(project_dir: String, export_name: String, max_resolution: int = 8192) -> Dictionary:
 	var python := find_python()
 	if python.is_empty():
 		return {"success": false, "error": "Python 3 not found. Please install Python 3."}
@@ -153,11 +154,12 @@ func compose_canvas(project_dir: String, export_name: String) -> Dictionary:
 		"echo ============================================\n" +
 		"echo  Terrain Map Fetcher — Compositing Canvas\n" +
 		"echo ============================================\n" +
-		'"%s" "%s" --project-dir "%s" --export-name "%s"\n' % [
+		'"%s" "%s" --project-dir "%s" --export-name "%s" --max-resolution %d\n' % [
 			python,
 			script_dir.path_join("compose_canvas.py"),
 			project_dir,
-			export_name
+			export_name,
+			max_resolution
 		] +
 		"if errorlevel 1 (\n" +
 		"  echo.\n" +

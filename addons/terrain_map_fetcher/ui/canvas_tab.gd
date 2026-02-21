@@ -21,6 +21,7 @@ var _zoom_lbl: Label
 var _vertex_spacing_spin: SpinBox
 var _height_offset_spin: SpinBox
 var _export_name_edit: LineEdit
+var _max_resolution_spin: SpinBox
 var _auto_import_check: CheckBox
 var _python_runner: Node
 var _status_lbl: Label
@@ -247,6 +248,18 @@ func _build_ui() -> void:
 	_export_name_edit.placeholder_text = "combined_terrain"
 	_export_name_edit.text = "combined_terrain"
 	right.add_child(_export_name_edit)
+
+	var res_row := HBoxContainer.new()
+	res_row.add_theme_constant_override("separation", 6)
+	right.add_child(res_row)
+	res_row.add_child(_make_label("Max res (px):", 10))
+	_max_resolution_spin = SpinBox.new()
+	_max_resolution_spin.min_value = 64
+	_max_resolution_spin.max_value = 32768
+	_max_resolution_spin.step = 64
+	_max_resolution_spin.value = 2048
+	_max_resolution_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	res_row.add_child(_max_resolution_spin)
 
 	_auto_import_check = CheckBox.new()
 	_auto_import_check.text = "Auto-import to Terrain3D"
@@ -517,9 +530,10 @@ func _on_export_pressed() -> void:
 	var export_name := _export_name_edit.text.strip_edges()
 	if export_name.is_empty():
 		export_name = "combined_terrain"
-	_set_status("Compositing canvas…")
+	var max_res: int = int(_max_resolution_spin.value)
+	_set_status("Compositing canvas… (max %dpx)" % max_res)
 	var result: Dictionary = _python_runner.compose_canvas(
-		_project.project_dir, export_name)
+		_project.project_dir, export_name, max_res)
 	if result.get("success", false):
 		_set_status("Exported to: " + result.get("output_path", "?"))
 		if _auto_import_check.button_pressed:
