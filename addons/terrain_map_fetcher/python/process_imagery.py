@@ -127,6 +127,13 @@ def main() -> None:
     print(f"  Size: {img.width}x{img.height}, mode: RGB")
     print(f"  Use this as the Color Map in the Terrain3D Importer")
 
+    # ── Save 256×256 preview thumbnail ────────────────────────────────────────
+    preview_path = out_dir / "preview.png"
+    preview = img.copy()
+    preview.thumbnail((256, 256), Image.LANCZOS)
+    preview.save(str(preview_path), format="PNG")
+    print(f"✓ Saved preview: {preview_path.name} ({preview.width}x{preview.height})")
+
     _write_meta(out_dir / "imagery_000_meta.txt", img.width, img.height, url)
     print("Imagery processing complete.")
 

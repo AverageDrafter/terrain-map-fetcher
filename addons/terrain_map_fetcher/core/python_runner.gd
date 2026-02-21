@@ -136,6 +136,56 @@ func process_tiles(dem_urls: Array, imagery_urls: Array, out_dir: String, bbox: 
 	return {"success": true, "output_path": out_dir, "error": ""}
 
 
+## Composite all placed patches from a project into a merged EXR + imagery PNG.
+## Returns {"success": bool, "output_path": String, "error": String}
+func compose_canvas(project_dir: String, export_name: String) -> Dictionary:
+	var python := find_python()
+	if python.is_empty():
+		return {"success": false, "error": "Python 3 not found. Please install Python 3."}
+
+	var script_dir  := _script_dir()
+	var exports_dir := project_dir.path_join("exports").path_join(export_name)
+	DirAccess.make_dir_recursive_absolute(exports_dir)
+
+	var runner_path := exports_dir.path_join("_run_compose.bat")
+	var runner_content := (
+		"@echo off\n" +
+		"echo ============================================\n" +
+		"echo  Terrain Map Fetcher — Compositing Canvas\n" +
+		"echo ============================================\n" +
+		'"%s" "%s" --project-dir "%s" --export-name "%s"\n' % [
+			python,
+			script_dir.path_join("compose_canvas.py"),
+			project_dir,
+			export_name
+		] +
+		"if errorlevel 1 (\n" +
+		"  echo.\n" +
+		"  echo ERROR: Composition failed.\n" +
+		"  pause\n" +
+		"  exit /b 1\n" +
+		")\n" +
+		"echo.\n" +
+		"echo ============================================\n" +
+		"echo  ALL DONE! You can close this window.\n" +
+		"echo ============================================\n" +
+		"pause\n"
+	)
+
+	var file := FileAccess.open(runner_path, FileAccess.WRITE)
+	if file:
+		file.store_string(runner_content)
+		file.close()
+	else:
+		return {"success": false, "error": "Could not write runner script."}
+
+	var result: Dictionary = _run_visible(runner_path)
+	DirAccess.remove_absolute(runner_path)
+	if result.get("success", false):
+		result["output_path"] = exports_dir
+	return result
+
+
 ## Combine a list of EXR tile paths into a single merged EXR.
 ## Returns {"success": bool, "output_path": String, "error": String}
 func combine_tiles(tile_paths: Array, out_dir: String) -> Dictionary:

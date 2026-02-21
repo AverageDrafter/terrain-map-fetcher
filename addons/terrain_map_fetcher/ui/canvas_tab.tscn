@@ -1,0 +1,9 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://addons/terrain_map_fetcher/ui/canvas_tab.gd" id="1"]
+
+[node name="CanvasTab" type="HSplitContainer"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+split_offset = 0
+script = ExtResource("1")

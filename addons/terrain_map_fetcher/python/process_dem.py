@@ -44,7 +44,6 @@ except ImportError:
 
 CHUNK_SIZE   = 1024 * 256   # 256 KB download chunks
 MAX_PIX_SIZE = 4096         # cap output at 4096px per side
-REGION_SIZE  = 1024         # Terrain3D region size — output must be a multiple of this
 
 
 def main() -> None:
@@ -276,16 +275,13 @@ def _write_exr(src_path: Path, exr_path: Path) -> dict:
         native_h, native_w = src.height, src.width
 
         # Proportional scale if native dimensions exceed the 4096 cap.
+        # Keep aspect ratio so vertex_spacing stays square (equal X and Y).
         if native_w > MAX_PIX_SIZE or native_h > MAX_PIX_SIZE:
             scale = MAX_PIX_SIZE / max(native_w, native_h)
-            base_w = int(native_w * scale)
-            base_h = int(native_h * scale)
+            target_w = int(native_w * scale)
+            target_h = int(native_h * scale)
         else:
-            base_w, base_h = native_w, native_h
-
-        # Snap UP to next multiple of REGION_SIZE.
-        target_w = ((base_w + REGION_SIZE - 1) // REGION_SIZE) * REGION_SIZE
-        target_h = ((base_h + REGION_SIZE - 1) // REGION_SIZE) * REGION_SIZE
+            target_w, target_h = native_w, native_h
 
         # Single read+resample — rasterio bilinear-interpolates all real data to
         # fill the target dimensions. No padding, no flat shelf.
