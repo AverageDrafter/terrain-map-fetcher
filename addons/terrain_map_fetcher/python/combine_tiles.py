@@ -7,8 +7,8 @@ large EXR heightmap. Tiles are arranged in a grid based on their geographic
 metadata embedded in the EXR, or sorted alphabetically as a fallback.
 
 Output:
-  - combined_heightmap.exr  — merged RGB 32-bit float EXR
-  - combined_heightmap_meta.txt — companion metadata
+  - combined_heightmap.exr  -- merged RGB 32-bit float EXR
+  - combined_heightmap_meta.txt -- companion metadata
 
 Usage:
     python3 combine_tiles.py --tile-list /path/to/tiles.txt --out-dir /path/to/output
@@ -30,7 +30,7 @@ except ImportError:
     sys.exit(1)
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# -- Entry point ---------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Combine multiple EXR heightmap tiles into one.")
@@ -57,18 +57,18 @@ def main() -> None:
         print("ERROR: No valid EXR files found in tile list.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Combining {len(tile_paths)} EXR tile(s)…")
+    print(f"Combining {len(tile_paths)} EXR tile(s)...")
 
-    # ── Load all tiles ────────────────────────────────────────────────────────
+    # -- Load all tiles --------------------------------------------------------
     tiles: list[dict] = []
     for i, path in enumerate(tile_paths):
         print(f"  [{i+1}/{len(tile_paths)}] Reading: {path.name}")
         tile = _read_exr(path)
         tiles.append(tile)
         print(f"    Size: {tile['width']}x{tile['height']} | "
-              f"Elev: {tile['data'].min():.1f}m – {tile['data'].max():.1f}m")
+              f"Elev: {tile['data'].min():.1f}m - {tile['data'].max():.1f}m")
 
-    # ── Validate consistent tile sizes ───────────────────────────────────────
+    # -- Validate consistent tile sizes ---------------------------------------
     widths  = [t["width"]  for t in tiles]
     heights = [t["height"] for t in tiles]
 
@@ -86,7 +86,7 @@ def main() -> None:
     tile_h = tiles[0]["height"]
     n      = len(tiles)
 
-    # ── Determine grid layout ─────────────────────────────────────────────────
+    # -- Determine grid layout -------------------------------------------------
     cols, rows = _compute_grid(n, args.layout)
     print(f"\nLayout: {cols} column(s) x {rows} row(s)")
 
@@ -95,7 +95,7 @@ def main() -> None:
         blank = np.zeros((tile_h, tile_w), dtype=np.float32)
         tiles.append({"data": blank, "width": tile_w, "height": tile_h})
 
-    # ── Stitch tiles into canvas ──────────────────────────────────────────────
+    # -- Stitch tiles into canvas ----------------------------------------------
     canvas_w = cols * tile_w
     canvas_h = rows * tile_h
     canvas   = np.zeros((canvas_h, canvas_w), dtype=np.float32)
@@ -113,21 +113,21 @@ def main() -> None:
         print(f"  Placed tile {idx+1:>3} at grid [{col}, {row}]  "
               f"pixel [{x0}:{x1}, {y0}:{y1}]")
 
-    # ── Blend seams between tiles ─────────────────────────────────────────────
+    # -- Blend seams between tiles ---------------------------------------------
     blend_px = 4  # pixels to blend at each seam
     canvas = _blend_seams(canvas, tile_w, tile_h, cols, rows, blend_px)
     print(f"Seam blending applied ({blend_px}px fade).")
 
-    # ── Write combined EXR ────────────────────────────────────────────────────
+    # -- Write combined EXR ----------------------------------------------------
     out_path = out_dir / "combined_heightmap.exr"
     _write_exr_rgb32(canvas, out_path)
 
     min_elev = float(canvas.min())
     max_elev = float(canvas.max())
 
-    print(f"\n✓ Saved: {out_path.name}")
+    print(f"\nOK Saved: {out_path.name}")
     print(f"  Size:      {canvas_w} x {canvas_h} px")
-    print(f"  Elevation: {min_elev:.1f}m – {max_elev:.1f}m")
+    print(f"  Elevation: {min_elev:.1f}m - {max_elev:.1f}m")
 
     _write_metadata(out_dir / "combined_heightmap_meta.txt", tile_paths, {
         "canvas_w": canvas_w,
@@ -143,7 +143,7 @@ def main() -> None:
     print("Done!")
 
 
-# ── EXR I/O ───────────────────────────────────────────────────────────────────
+# -- EXR I/O -------------------------------------------------------------------
 
 def _read_exr(path: Path) -> dict:
     """Read an RGB 32-bit float EXR and return the R channel as a float32 array."""
@@ -181,7 +181,7 @@ def _write_exr_rgb32(elevation: np.ndarray, out_path: Path) -> None:
     exr.close()
 
 
-# ── Grid layout ───────────────────────────────────────────────────────────────
+# -- Grid layout ---------------------------------------------------------------
 
 def _compute_grid(n: int, layout: str) -> tuple[int, int]:
     """Return (cols, rows) for placing n tiles."""
@@ -202,7 +202,7 @@ def _compute_grid(n: int, layout: str) -> tuple[int, int]:
     return best_cols, best_rows
 
 
-# ── Resampling ────────────────────────────────────────────────────────────────
+# -- Resampling ----------------------------------------------------------------
 
 def _resample(data: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
     """Simple bilinear resample of a 2D float32 array to target dimensions."""
@@ -212,7 +212,7 @@ def _resample(data: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
     return np.array(resized, dtype=np.float32)
 
 
-# ── Seam blending ─────────────────────────────────────────────────────────────
+# -- Seam blending -------------------------------------------------------------
 
 def _blend_seams(canvas: np.ndarray, tile_w: int, tile_h: int,
                  cols: int, rows: int, blend_px: int) -> np.ndarray:
@@ -248,11 +248,11 @@ def _blend_seams(canvas: np.ndarray, tile_w: int, tile_h: int,
     return out
 
 
-# ── Metadata ──────────────────────────────────────────────────────────────────
+# -- Metadata ------------------------------------------------------------------
 
 def _write_metadata(meta_path: Path, tile_paths: list[Path], meta: dict) -> None:
     lines = [
-        "Terrain Map Fetcher — Combined Heightmap Metadata",
+        "Terrain Map Fetcher -- Combined Heightmap Metadata",
         "=" * 40,
         f"Total tiles:   {len(tile_paths)}",
         f"Grid layout:   {meta['cols']} col(s) x {meta['rows']} row(s)",
@@ -266,9 +266,9 @@ def _write_metadata(meta_path: Path, tile_paths: list[Path], meta: dict) -> None
         "  - EXR format: RGB 32-bit float, values in real meters",
         f"  - Height scale:  {meta['max_elev'] - meta['min_elev']:.1f} (elevation range)",
         f"  - Height offset: {meta['min_elev']:.1f} (minimum elevation)",
-        "  - 1 pixel = 1 meter (approx) — leave vertex_spacing at 1.0",
+        "  - 1 pixel = 1 meter (approx) -- leave vertex_spacing at 1.0",
         "",
-        "Tile order (left→right, top→bottom):",
+        "Tile order (left->right, top->bottom):",
     ] + [f"  [{i+1:>3}] {p.name}" for i, p in enumerate(tile_paths)]
     meta_path.write_text("\n".join(lines))
 

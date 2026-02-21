@@ -24,7 +24,14 @@ var _export_name_edit: LineEdit
 var _auto_import_check: CheckBox
 var _python_runner: Node
 var _status_lbl: Label
-var _placed_rows: Dictionary = {}  # patch_name → Label (for selection highlight)
+var _placed_rows: Dictionary = {}  # instance_id → Label
+
+# Selected patch sidebar
+var _selected_section: VBoxContainer
+var _selected_instance_lbl: Label
+var _scale_xy_spin: SpinBox
+var _scale_z_spin: SpinBox
+var _updating_scales: bool = false
 
 
 func _ready() -> void:
@@ -127,6 +134,7 @@ func _build_ui() -> void:
 	_canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_canvas.patch_selected.connect(_on_canvas_patch_selected)
+	_canvas.patch_removed.connect(_on_canvas_patch_removed)
 	_canvas.canvas_changed.connect(_on_canvas_changed)
 	left_vbox.add_child(_canvas)
 
@@ -148,7 +156,7 @@ func _build_ui() -> void:
 	right.add_child(_make_section_label("PLACED PATCHES"))
 
 	var placed_scroll := ScrollContainer.new()
-	placed_scroll.custom_minimum_size = Vector2(0, 120)
+	placed_scroll.custom_minimum_size = Vector2(0, 100)
 	placed_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	right.add_child(placed_scroll)
 
@@ -156,6 +164,47 @@ func _build_ui() -> void:
 	_placed_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_placed_list.add_theme_constant_override("separation", 2)
 	placed_scroll.add_child(_placed_list)
+
+	right.add_child(HSeparator.new())
+
+	# ── Selected patch section (hidden until a patch is selected) ─────────────
+	_selected_section = VBoxContainer.new()
+	_selected_section.add_theme_constant_override("separation", 4)
+	_selected_section.visible = false
+	right.add_child(_selected_section)
+
+	_selected_section.add_child(_make_section_label("SELECTED"))
+
+	_selected_instance_lbl = _make_label("", 10)
+	_selected_instance_lbl.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+	_selected_instance_lbl.clip_text = true
+	_selected_section.add_child(_selected_instance_lbl)
+
+	var scale_grid := GridContainer.new()
+	scale_grid.columns = 2
+	scale_grid.add_theme_constant_override("h_separation", 8)
+	scale_grid.add_theme_constant_override("v_separation", 4)
+	_selected_section.add_child(scale_grid)
+
+	scale_grid.add_child(_make_label("Scale XY:", 10))
+	_scale_xy_spin = SpinBox.new()
+	_scale_xy_spin.min_value = 0.01
+	_scale_xy_spin.max_value = 100.0
+	_scale_xy_spin.step = 0.01
+	_scale_xy_spin.value = 1.0
+	_scale_xy_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scale_xy_spin.value_changed.connect(_on_scale_xy_changed)
+	scale_grid.add_child(_scale_xy_spin)
+
+	scale_grid.add_child(_make_label("Scale Z:", 10))
+	_scale_z_spin = SpinBox.new()
+	_scale_z_spin.min_value = 0.01
+	_scale_z_spin.max_value = 100.0
+	_scale_z_spin.step = 0.01
+	_scale_z_spin.value = 1.0
+	_scale_z_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scale_z_spin.value_changed.connect(_on_scale_z_changed)
+	scale_grid.add_child(_scale_z_spin)
 
 	right.add_child(HSeparator.new())
 
@@ -225,6 +274,7 @@ func refresh(project: Object) -> void:
 	_refresh_placed_list()
 	_refresh_palette()
 	_update_zoom_label()
+	_update_selected_section("")
 
 
 func on_patches_changed() -> void:
@@ -232,6 +282,7 @@ func on_patches_changed() -> void:
 		_canvas.load_from_project(_project)
 		_refresh_placed_list()
 		_refresh_palette()
+		_update_selected_section("")
 
 
 func on_mask_saved(patch_name: String) -> void:
@@ -273,8 +324,8 @@ func _canvas_drop(pos: Vector2, data: Variant) -> void:
 	if pref == null:
 		return
 	var canvas_pos: Vector2 = _canvas._screen_to_canvas(pos)
-	_project.add_to_canvas(pname, int(canvas_pos.x), int(canvas_pos.y))
-	_canvas.add_patch(pname, pref, int(canvas_pos.x), int(canvas_pos.y))
+	var iid: String = _project.add_to_canvas(pname, int(canvas_pos.x), int(canvas_pos.y))
+	_canvas.add_patch(iid, pname, pref, int(canvas_pos.x), int(canvas_pos.y))
 	_refresh_placed_list()
 
 
@@ -287,41 +338,44 @@ func _refresh_placed_list() -> void:
 	if _project == null or not _project.is_open():
 		return
 	for cp in _project.canvas_patches:
-		var pname: String = cp.get("patch_name", "")
+		var iid: String = cp.get("instance_id", "")
+		if iid.is_empty():
+			continue
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 2)
 		_placed_list.add_child(row)
 
-		var name_lbl := _make_label(pname, 10)
+		var name_lbl := _make_label(iid, 10)
 		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_lbl.clip_text = true
 		row.add_child(name_lbl)
-		_placed_rows[pname] = name_lbl
+		_placed_rows[iid] = name_lbl
 
 		var up_btn := Button.new()
 		up_btn.text = "↑"
 		up_btn.flat = true
 		up_btn.custom_minimum_size = Vector2(18, 0)
-		var pn_up := pname
-		up_btn.pressed.connect(func(): _move_patch_up(pn_up))
+		var iid_up := iid
+		up_btn.pressed.connect(func(): _move_patch_up(iid_up))
 		row.add_child(up_btn)
 
 		var dn_btn := Button.new()
 		dn_btn.text = "↓"
 		dn_btn.flat = true
 		dn_btn.custom_minimum_size = Vector2(18, 0)
-		var pn_dn := pname
-		dn_btn.pressed.connect(func(): _move_patch_down(pn_dn))
+		var iid_dn := iid
+		dn_btn.pressed.connect(func(): _move_patch_down(iid_dn))
 		row.add_child(dn_btn)
 
 		var remove_btn := Button.new()
 		remove_btn.text = "×"
 		remove_btn.flat  = true
 		remove_btn.custom_minimum_size = Vector2(18, 0)
-		var pn := pname
+		var iid_rm := iid
 		remove_btn.pressed.connect(func():
-			_project.remove_from_canvas(pn)
-			_canvas.remove_patch(pn)
+			_project.remove_from_canvas(iid_rm)
+			_canvas.remove_patch(iid_rm)
+			_update_selected_section("")
 			_refresh_placed_list())
 		row.add_child(remove_btn)
 	_sync_placed_selection()
@@ -334,55 +388,104 @@ func _on_view_mode_changed(idx: int) -> void:
 	_canvas.queue_redraw()
 
 
-func _on_canvas_patch_selected(_patch_name: String) -> void:
+func _on_canvas_patch_selected(instance_id: String) -> void:
 	_sync_placed_selection()
+	_update_selected_section(instance_id)
+
+
+func _on_canvas_patch_removed(instance_id: String) -> void:
+	if _project:
+		_project.remove_from_canvas(instance_id)
+	_update_selected_section("")
+	_refresh_placed_list()
 
 
 func _sync_placed_selection() -> void:
-	## Highlight the selected patch row; clear all others.
-	var sel: String = _canvas.selected_patch_name
-	for pname in _placed_rows:
-		var lbl: Label = _placed_rows[pname] as Label
+	## Highlight the selected instance row; clear all others.
+	var sel: String = _canvas.selected_instance_id
+	for iid in _placed_rows:
+		var lbl: Label = _placed_rows[iid] as Label
 		if not is_instance_valid(lbl):
 			continue
-		if pname == sel:
+		if iid == sel:
 			lbl.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0))
 		else:
 			lbl.remove_theme_color_override("font_color")
 
 
-func _move_patch_up(pname: String) -> void:
+func _update_selected_section(instance_id: String) -> void:
+	if not is_instance_valid(_selected_section):
+		return
+	if instance_id.is_empty() or _project == null:
+		_selected_section.visible = false
+		return
+	_selected_section.visible = true
+	_selected_instance_lbl.text = instance_id
+	_updating_scales = true
+	for cp in _project.canvas_patches:
+		if cp.get("instance_id", "") == instance_id:
+			_scale_xy_spin.value = float(cp.get("scale_xy", 1.0))
+			_scale_z_spin.value  = float(cp.get("scale_z", 1.0))
+			break
+	_updating_scales = false
+
+
+func _on_scale_xy_changed(_val: float) -> void:
+	if _updating_scales or _project == null:
+		return
+	var iid: String = _canvas.selected_instance_id
+	if iid.is_empty():
+		return
+	_project.update_canvas_scale(iid, _scale_xy_spin.value, _scale_z_spin.value)
+	# Update viewport immediately for visual feedback
+	for cp in _canvas.placed_patches:
+		if cp.get("instance_id", "") == iid:
+			cp["scale_xy"] = _scale_xy_spin.value
+			break
+	_canvas.queue_redraw()
+
+
+func _on_scale_z_changed(_val: float) -> void:
+	if _updating_scales or _project == null:
+		return
+	var iid: String = _canvas.selected_instance_id
+	if iid.is_empty():
+		return
+	_project.update_canvas_scale(iid, _scale_xy_spin.value, _scale_z_spin.value)
+
+
+func _move_patch_up(instance_id: String) -> void:
 	if _project == null:
 		return
 	var patches: Array = _project.canvas_patches
 	for i in patches.size():
 		var cp: Dictionary = patches[i]
-		if cp.get("patch_name", "") == pname and i > 0:
+		if cp.get("instance_id", "") == instance_id and i > 0:
 			var earlier: Dictionary = patches[i - 1]
 			patches[i - 1] = patches[i]
 			patches[i] = earlier
 			_project.save_project()
-			var sel: String = _canvas.selected_patch_name
+			var sel: String = _canvas.selected_instance_id
 			_canvas.load_from_project(_project)
-			_canvas.selected_patch_name = sel
+			_canvas.selected_instance_id = sel
 			_refresh_placed_list()
 			return
 
 
-func _move_patch_down(pname: String) -> void:
+func _move_patch_down(instance_id: String) -> void:
 	if _project == null:
 		return
 	var patches: Array = _project.canvas_patches
 	for i in patches.size():
 		var cp: Dictionary = patches[i]
-		if cp.get("patch_name", "") == pname and i < patches.size() - 1:
+		if cp.get("instance_id", "") == instance_id and i < patches.size() - 1:
 			var later: Dictionary = patches[i + 1]
 			patches[i + 1] = patches[i]
 			patches[i] = later
 			_project.save_project()
-			var sel: String = _canvas.selected_patch_name
+			var sel: String = _canvas.selected_instance_id
 			_canvas.load_from_project(_project)
-			_canvas.selected_patch_name = sel
+			_canvas.selected_instance_id = sel
 			_refresh_placed_list()
 			return
 
@@ -391,7 +494,9 @@ func _on_canvas_changed() -> void:
 	if _project == null:
 		return
 	for cp in _canvas.placed_patches:
-		_project.update_canvas_position(cp.patch_name, cp.canvas_x, cp.canvas_y)
+		var iid: String = cp.get("instance_id", "")
+		if not iid.is_empty():
+			_project.update_canvas_position(iid, cp.canvas_x, cp.canvas_y)
 
 
 func _on_settings_changed(_val: float) -> void:

@@ -6,5 +6,9 @@
 # Generated tool output
 FetchOutput/
 
+# TerrainProject data (large binaries — not tracked)
+TerrainProject/
+TerrainData/
+
 # Claude session files
 .claude/

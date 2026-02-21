@@ -60,16 +60,16 @@ def main() -> None:
     bbox_wgs = tuple(args.bbox)   # (min_lon, min_lat, max_lon, max_lat)
 
     if _is_cached(out_dir, bbox_wgs):
-        print("Cache hit — bbox unchanged, skipping DEM download.")
+        print("Cache hit -- bbox unchanged, skipping DEM download.")
         return
 
-    print(f"Processing {len(urls)} DEM tile(s)…")
+    print(f"Processing {len(urls)} DEM tile(s)...")
     print(f"Requested bbox: {bbox_wgs}")
 
     tmp_files: list[Path] = []
 
     try:
-        # ── Step 1: Download all tiles ────────────────────────────────────────
+        # -- Step 1: Download all tiles ----------------------------------------
         downloaded: list[Path] = []
         for i, url in enumerate(urls):
             print(f"\n[{i+1}/{len(urls)}] Downloading: {url}")
@@ -79,7 +79,7 @@ def main() -> None:
             print(f"  Download complete ({tmp.stat().st_size / 1024 / 1024:.1f} MB)")
             downloaded.append(tmp)
 
-        # ── Step 2: Reproject each tile to UTM and crop to bbox ───────────────
+        # -- Step 2: Reproject each tile to UTM and crop to bbox ---------------
         utm_crs   = _detect_utm_crs(downloaded[0], bbox_wgs)
         bbox_utm  = _wgs84_bbox_to_utm(bbox_wgs, utm_crs)
         print(f"\nTarget CRS: {utm_crs}")
@@ -93,25 +93,25 @@ def main() -> None:
                 cropped.append(out_path)
                 print(f"  [{i+1}/{len(downloaded)}] Cropped OK")
             else:
-                print(f"  [{i+1}/{len(downloaded)}] No overlap with bbox — skipped")
+                print(f"  [{i+1}/{len(downloaded)}] No overlap with bbox -- skipped")
 
         if not cropped:
             print("ERROR: No tiles overlapped the requested bbox.", file=sys.stderr)
             sys.exit(1)
 
-        # ── Step 3: Merge cropped tiles into one mosaic ───────────────────────
-        print(f"\nMerging {len(cropped)} cropped tile(s)…")
+        # -- Step 3: Merge cropped tiles into one mosaic -----------------------
+        print(f"\nMerging {len(cropped)} cropped tile(s)...")
         mosaic_path = Path(tempfile.mktemp(suffix=".tif"))
         tmp_files.append(mosaic_path)
         _merge_tiles(cropped, mosaic_path)
 
-        # ── Step 4: Write EXR ─────────────────────────────────────────────────
+        # -- Step 4: Write EXR -------------------------------------------------
         exr_path  = out_dir / "heightmap_000.exr"
         meta      = _write_exr(mosaic_path, exr_path)
 
-        print(f"\n✓ Saved: {exr_path.name}")
+        print(f"\nOK Saved: {exr_path.name}")
         print(f"  Size:      {meta['width']}x{meta['height']} px")
-        print(f"  Elevation: {meta['min_elev']:.1f}m – {meta['max_elev']:.1f}m")
+        print(f"  Elevation: {meta['min_elev']:.1f}m - {meta['max_elev']:.1f}m")
         print(f"  CRS:       {utm_crs}")
         print(f"  Coverage:  {meta['coverage_km_x']:.1f} x {meta['coverage_km_y']:.1f} km")
 
@@ -127,7 +127,7 @@ def main() -> None:
                 pass
 
 
-# ── Cache check ───────────────────────────────────────────────────────────────
+# -- Cache check ---------------------------------------------------------------
 
 def _is_cached(out_dir: Path, bbox_wgs: tuple) -> bool:
     """Return True if existing outputs were produced from the same bbox."""
@@ -143,7 +143,7 @@ def _is_cached(out_dir: Path, bbox_wgs: tuple) -> bool:
     return False
 
 
-# ── Download ──────────────────────────────────────────────────────────────────
+# -- Download ------------------------------------------------------------------
 
 def _download(url: str, dest: Path) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": "TerrainMapFetcher/0.1"})
@@ -161,7 +161,7 @@ def _download(url: str, dest: Path) -> None:
         raise RuntimeError(f"Download failed: {e.reason}") from e
 
 
-# ── CRS helpers ───────────────────────────────────────────────────────────────
+# -- CRS helpers ---------------------------------------------------------------
 
 def _detect_utm_crs(src_path: Path, bbox_wgs: tuple) -> CRS:
     """Pick UTM zone from the center of the requested bbox."""
@@ -183,7 +183,7 @@ def _wgs84_bbox_to_utm(bbox_wgs: tuple, utm_crs: CRS) -> tuple:
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-# ── Reproject + crop ──────────────────────────────────────────────────────────
+# -- Reproject + crop ----------------------------------------------------------
 
 def _reproject_and_crop(src_path: Path, dst_path: Path,
                         utm_crs: CRS, bbox_utm: tuple) -> bool:
@@ -215,7 +215,7 @@ def _reproject_and_crop(src_path: Path, dst_path: Path,
                     resampling=Resampling.bilinear,
                 )
                 # Fill nodata with median to avoid edge cliffs.
-                # NOTE: np.isnan() is required — (data == np.nan) is always False
+                # NOTE: np.isnan() is required -- (data == np.nan) is always False
                 # in IEEE 754, so NaN pixels would silently survive without it.
                 nodata_val = src.nodata if src.nodata is not None else -9999
                 mask = np.isnan(data) | (data == nodata_val) | (data < -1000)
@@ -251,7 +251,7 @@ def _reproject_and_crop(src_path: Path, dst_path: Path,
                 reproj_tmp.unlink()
 
 
-# ── Merge ─────────────────────────────────────────────────────────────────────
+# -- Merge ---------------------------------------------------------------------
 
 def _merge_tiles(tile_paths: list[Path], out_path: Path) -> None:
     datasets = [rasterio.open(p) for p in tile_paths]
@@ -268,7 +268,7 @@ def _merge_tiles(tile_paths: list[Path], out_path: Path) -> None:
             ds.close()
 
 
-# ── EXR export ────────────────────────────────────────────────────────────────
+# -- EXR export ----------------------------------------------------------------
 
 def _write_exr(src_path: Path, exr_path: Path) -> dict:
     with rasterio.open(src_path) as src:
@@ -283,7 +283,7 @@ def _write_exr(src_path: Path, exr_path: Path) -> dict:
         else:
             target_w, target_h = native_w, native_h
 
-        # Single read+resample — rasterio bilinear-interpolates all real data to
+        # Single read+resample -- rasterio bilinear-interpolates all real data to
         # fill the target dimensions. No padding, no flat shelf.
         data = src.read(
             1,
@@ -332,17 +332,17 @@ def _write_exr(src_path: Path, exr_path: Path) -> dict:
     }
 
 
-# ── Metadata ──────────────────────────────────────────────────────────────────
+# -- Metadata ------------------------------------------------------------------
 
 def _write_meta(path: Path, meta: dict, crs: CRS, bbox_wgs: tuple, bbox_utm: tuple) -> None:
     lines = [
-        "Terrain Map Fetcher — Heightmap Metadata",
+        "Terrain Map Fetcher -- Heightmap Metadata",
         "=" * 40,
         f"Output file:   heightmap_000.exr",
         f"Size:          {meta['width']} x {meta['height']} px",
         f"Resolution:    {meta['res_x']:.1f}m x {meta['res_y']:.1f}m per pixel",
         f"Coverage:      {meta['coverage_km_x']:.2f} x {meta['coverage_km_y']:.2f} km",
-        f"Elevation:     {meta['min_elev']:.1f}m – {meta['max_elev']:.1f}m",
+        f"Elevation:     {meta['min_elev']:.1f}m - {meta['max_elev']:.1f}m",
         f"CRS:           {crs}",
         f"Bbox (WGS84):  {bbox_wgs}",
         f"Bbox (UTM):    {bbox_utm[0]:.1f} {bbox_utm[1]:.1f} {bbox_utm[2]:.1f} {bbox_utm[3]:.1f}",
@@ -351,7 +351,7 @@ def _write_meta(path: Path, meta: dict, crs: CRS, bbox_wgs: tuple, bbox_utm: tup
         "  Height Map:      heightmap_000.exr",
         "  import_scale:    1  (real meter values, no normalization needed)",
         f"  height_offset:   0  (or -{meta['min_elev']:.0f} to normalize min elev to y=0)",
-        f"  vertex_spacing:  {meta['res_x']:.0f}  (meters per pixel — set on the Terrain3D node)",
+        f"  vertex_spacing:  {meta['res_x']:.0f}  (meters per pixel -- set on the Terrain3D node)",
         "",
         "The imagery_000.png covers the exact same bbox and can be",
         "used as the color map in Terrain3D.",

@@ -2,7 +2,8 @@
 extends Control
 ## Visual canvas: renders placed patches, handles pan/zoom and drag-to-reposition.
 
-signal patch_selected(patch_name: String)
+signal patch_selected(instance_id: String)
+signal patch_removed(instance_id: String)
 signal canvas_changed()
 
 enum ViewMode { FLAT_COLOR, TERRAIN }
@@ -11,9 +12,9 @@ enum ViewMode { FLAT_COLOR, TERRAIN }
 var view_offset: Vector2 = Vector2(40, 40)
 var view_scale: float = 0.1  # canvas pixels → screen pixels
 
-# Placed patches: [{patch_name, canvas_x, canvas_y, patch_ref, color}]
+# Placed patches: [{instance_id, patch_name, canvas_x, canvas_y, patch_ref, color, scale_xy, scale_z}]
 var placed_patches: Array = []
-var selected_patch_name: String = ""
+var selected_instance_id: String = ""
 var view_mode: int = ViewMode.FLAT_COLOR
 var snap_to_grid: bool = false
 
@@ -23,13 +24,13 @@ var _tex_cache: Dictionary = {}
 var _mask_image_cache: Dictionary = {}
 
 # Hover state
-var _hover_patch_name: String = ""
+var _hover_instance_id: String = ""
 
 # Pan / drag state
 var _is_panning: bool = false
 var _pan_start: Vector2 = Vector2.ZERO
 var _pan_start_offset: Vector2 = Vector2.ZERO
-var _drag_name: String = ""
+var _drag_instance_id: String = ""
 var _drag_offset: Vector2 = Vector2.ZERO
 
 const SNAP_SIZE: float = 256.0
@@ -51,8 +52,8 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	clip_contents = true
 	mouse_exited.connect(func():
-		if not _hover_patch_name.is_empty():
-			_hover_patch_name = ""
+		if not _hover_instance_id.is_empty():
+			_hover_instance_id = ""
 			queue_redraw())
 
 
@@ -60,8 +61,8 @@ func _ready() -> void:
 
 func load_from_project(project: Object) -> void:
 	placed_patches.clear()
-	selected_patch_name = ""
-	_hover_patch_name = ""
+	selected_instance_id = ""
+	_hover_instance_id = ""
 	_tex_cache.clear()
 	_mask_image_cache.clear()
 	if project == null or not project.is_open():
@@ -70,47 +71,64 @@ func load_from_project(project: Object) -> void:
 
 	var color_idx := 0
 	for cp in project.canvas_patches:
+		var iid: String = cp.get("instance_id", "")
 		var pname: String = cp.get("patch_name", "")
+		if iid.is_empty():
+			continue  # skip malformed entries
 		var patch_obj: Object = project.get_patch_by_name(pname)
+		var scale_xy: float = float(cp.get("scale_xy", 1.0))
+		var scale_z: float = float(cp.get("scale_z", 1.0))
 		placed_patches.append({
-			"patch_name": pname,
-			"canvas_x":   int(cp.get("canvas_x", 0)),
-			"canvas_y":   int(cp.get("canvas_y", 0)),
-			"patch_ref":  patch_obj,
-			"color":      PATCH_COLORS[color_idx % PATCH_COLORS.size()],
+			"instance_id": iid,
+			"patch_name":  pname,
+			"canvas_x":    int(cp.get("canvas_x", 0)),
+			"canvas_y":    int(cp.get("canvas_y", 0)),
+			"patch_ref":   patch_obj,
+			"color":       PATCH_COLORS[color_idx % PATCH_COLORS.size()],
+			"scale_xy":    scale_xy,
+			"scale_z":     scale_z,
 		})
 		color_idx += 1
 	queue_redraw()
 
 
-func add_patch(patch_name: String, patch_ref: Object, canvas_x: int, canvas_y: int) -> void:
-	# Check not already placed
-	for cp in placed_patches:
-		if cp.patch_name == patch_name:
-			return
+func add_patch(instance_id: String, patch_name: String, patch_ref: Object,
+		canvas_x: int, canvas_y: int, scale_xy: float = 1.0, scale_z: float = 1.0) -> void:
 	var idx := placed_patches.size()
 	placed_patches.append({
-		"patch_name": patch_name,
-		"canvas_x":   canvas_x,
-		"canvas_y":   canvas_y,
-		"patch_ref":  patch_ref,
-		"color":      PATCH_COLORS[idx % PATCH_COLORS.size()],
+		"instance_id": instance_id,
+		"patch_name":  patch_name,
+		"canvas_x":    canvas_x,
+		"canvas_y":    canvas_y,
+		"patch_ref":   patch_ref,
+		"color":       PATCH_COLORS[idx % PATCH_COLORS.size()],
+		"scale_xy":    scale_xy,
+		"scale_z":     scale_z,
 	})
 	queue_redraw()
 	canvas_changed.emit()
 
 
-func remove_patch(patch_name: String) -> void:
+func remove_patch(instance_id: String) -> void:
+	var pname: String = ""
+	for cp in placed_patches:
+		if cp.get("instance_id", "") == instance_id:
+			pname = cp.patch_name
+			break
 	placed_patches = placed_patches.filter(
-		func(cp): return cp.patch_name != patch_name)
-	if selected_patch_name == patch_name:
-		selected_patch_name = ""
-	invalidate_patch_cache(patch_name)
+		func(cp): return cp.get("instance_id", "") != instance_id)
+	if selected_instance_id == instance_id:
+		selected_instance_id = ""
+	if _hover_instance_id == instance_id:
+		_hover_instance_id = ""
+	if not pname.is_empty():
+		invalidate_patch_cache(pname)
 	queue_redraw()
+	patch_removed.emit(instance_id)
 	canvas_changed.emit()
 
 
-## Invalidate cached textures for one patch (or all if patch_name is empty).
+## Invalidate cached textures for one patch_name (or all if empty).
 ## Call this after a mask has been edited and saved.
 func invalidate_patch_cache(patch_name: String = "") -> void:
 	if patch_name.is_empty():
@@ -138,8 +156,9 @@ func _draw() -> void:
 	for i in placed_patches.size():
 		var cp: Dictionary = placed_patches[i]
 		var patch: Object = cp.get("patch_ref")
+		var scale_xy: float = float(cp.get("scale_xy", 1.0))
 		var screen_pos: Vector2 = _canvas_to_screen(Vector2(cp.canvas_x, cp.canvas_y))
-		var patch_screen_size: Vector2 = _patch_screen_size(patch)
+		var patch_screen_size: Vector2 = _patch_screen_size(patch, scale_xy)
 
 		match view_mode:
 			ViewMode.FLAT_COLOR:
@@ -150,12 +169,13 @@ func _draw() -> void:
 				draw_texture_rect(tex, Rect2(screen_pos, patch_screen_size), false)
 
 		# Name label + border — visible on hover or selection only.
-		var is_selected: bool = cp.patch_name == selected_patch_name
-		var is_hovered: bool  = cp.patch_name == _hover_patch_name
+		var iid: String = cp.get("instance_id", "")
+		var is_selected: bool = iid == selected_instance_id
+		var is_hovered: bool  = iid == _hover_instance_id
 
 		if is_selected or is_hovered:
 			draw_string(ThemeDB.fallback_font,
-				screen_pos + Vector2(4, 14), cp.patch_name,
+				screen_pos + Vector2(4, 14), iid,
 				HORIZONTAL_ALIGNMENT_LEFT, patch_screen_size.x - 8,
 				11, Color(1, 1, 1, 0.9))
 			var border_alpha: float = 0.45 if is_selected else 0.22
@@ -180,12 +200,12 @@ func _draw_grid() -> void:
 		y += step
 
 
-func _patch_screen_size(patch: Object) -> Vector2:
+func _patch_screen_size(patch: Object, scale_xy: float = 1.0) -> Vector2:
 	if patch == null:
-		return Vector2(100, 100) * view_scale
-	var pw := float(patch.width_px)  if patch.width_px > 0  else 1024.0
-	var ph := float(patch.height_px) if patch.height_px > 0 else 1024.0
-	return Vector2(pw, ph) * view_scale
+		return Vector2(100, 100) * view_scale * scale_xy
+	var pw: float = float(patch.width_px)  if patch.width_px  > 0 else 1024.0
+	var ph: float = float(patch.height_px) if patch.height_px > 0 else 1024.0
+	return Vector2(pw, ph) * view_scale * scale_xy
 
 
 # ── Coordinate helpers ────────────────────────────────────────────────────────
@@ -225,8 +245,8 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 			if event.pressed:
 				_on_left_press(event.position)
 			else:
-				if _drag_name != "":
-					_drag_name = ""
+				if _drag_instance_id != "":
+					_drag_instance_id = ""
 					canvas_changed.emit()
 
 		MOUSE_BUTTON_RIGHT:
@@ -238,13 +258,13 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if _is_panning:
 		view_offset = _pan_start_offset + (event.position - _pan_start)
 		queue_redraw()
-	elif _drag_name != "" and (event.button_mask & MOUSE_BUTTON_MASK_LEFT):
+	elif _drag_instance_id != "" and (event.button_mask & MOUSE_BUTTON_MASK_LEFT):
 		var raw_pos: Vector2 = _screen_to_canvas(event.position - _drag_offset)
 		var canvas_pos: Vector2 = raw_pos
 		if snap_to_grid:
 			canvas_pos = (raw_pos / SNAP_SIZE).round() * SNAP_SIZE
 		for cp in placed_patches:
-			if cp.patch_name == _drag_name:
+			if cp.get("instance_id", "") == _drag_instance_id:
 				cp["canvas_x"] = int(canvas_pos.x)
 				cp["canvas_y"] = int(canvas_pos.y)
 				break
@@ -252,8 +272,8 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	else:
 		# Update hover — uses alpha-aware hit test
 		var new_hover: String = _hit_test_at(event.position)
-		if new_hover != _hover_patch_name:
-			_hover_patch_name = new_hover
+		if new_hover != _hover_instance_id:
+			_hover_instance_id = new_hover
 			queue_redraw()
 
 
@@ -266,21 +286,21 @@ func _zoom(center: Vector2, factor: float) -> void:
 
 
 func _on_left_press(pos: Vector2) -> void:
-	_drag_name = ""
+	_drag_instance_id = ""
 	var hit: String = _hit_test_at(pos)
 
 	if hit.is_empty():
-		selected_patch_name = ""
+		selected_instance_id = ""
 		queue_redraw()
 		patch_selected.emit("")
 		return
 
 	for i in range(placed_patches.size() - 1, -1, -1):
 		var cp: Dictionary = placed_patches[i]
-		if cp.patch_name != hit:
+		if cp.get("instance_id", "") != hit:
 			continue
-		selected_patch_name = hit
-		_drag_name = hit
+		selected_instance_id = hit
+		_drag_instance_id = hit
 		var patch_canvas_pos: Vector2 = Vector2(cp.canvas_x, cp.canvas_y)
 		_drag_offset = pos - _canvas_to_screen(patch_canvas_pos)
 		queue_redraw()
@@ -311,8 +331,9 @@ func fit_patches() -> void:
 	var max_y: float = -INF
 	for cp in placed_patches:
 		var patch: Object = cp.get("patch_ref")
-		var pw: float = float(patch.width_px)  if patch and patch.width_px  > 0 else 1024.0
-		var ph: float = float(patch.height_px) if patch and patch.height_px > 0 else 1024.0
+		var scale_xy: float = float(cp.get("scale_xy", 1.0))
+		var pw: float = (float(patch.width_px)  if patch and patch.width_px  > 0 else 1024.0) * scale_xy
+		var ph: float = (float(patch.height_px) if patch and patch.height_px > 0 else 1024.0) * scale_xy
 		var cx: float = float(cp.canvas_x)
 		var cy: float = float(cp.canvas_y)
 		min_x = minf(min_x, cx)
@@ -340,26 +361,27 @@ func get_zoom_percent() -> int:
 # ── Alpha-aware hit testing ────────────────────────────────────────────────────
 
 func _hit_test_at(screen_pos: Vector2) -> String:
-	## Returns the topmost patch whose mask is non-transparent at screen_pos.
-	## Iterates from top to bottom; transparent pixels fall through to the patch below.
+	## Returns the instance_id of the topmost patch whose mask is non-transparent
+	## at screen_pos. Transparent pixels fall through to the patch below.
 	var canvas_pos: Vector2 = _screen_to_canvas(screen_pos)
 	for i in range(placed_patches.size() - 1, -1, -1):
 		var cp: Dictionary = placed_patches[i]
 		var patch: Object = cp.get("patch_ref")
+		var scale_xy: float = float(cp.get("scale_xy", 1.0))
 		var patch_origin: Vector2 = Vector2(cp.canvas_x, cp.canvas_y)
-		var pw: float = float(patch.width_px)  if patch and patch.width_px  > 0 else 1024.0
-		var ph: float = float(patch.height_px) if patch and patch.height_px > 0 else 1024.0
+		var pw: float = (float(patch.width_px)  if patch and patch.width_px  > 0 else 1024.0) * scale_xy
+		var ph: float = (float(patch.height_px) if patch and patch.height_px > 0 else 1024.0) * scale_xy
 		if not Rect2(patch_origin, Vector2(pw, ph)).has_point(canvas_pos):
 			continue
 		var mask_img: Image = _get_mask_image(cp.patch_name, patch)
 		if mask_img == null:
-			return cp.patch_name  # no mask → fully opaque everywhere
+			return cp.get("instance_id", "")  # no mask → fully opaque everywhere
 		var uv_x: float = (canvas_pos.x - patch_origin.x) / pw
 		var uv_y: float = (canvas_pos.y - patch_origin.y) / ph
 		var mx: int = clampi(int(uv_x * float(mask_img.get_width())),  0, mask_img.get_width()  - 1)
 		var my: int = clampi(int(uv_y * float(mask_img.get_height())), 0, mask_img.get_height() - 1)
 		if mask_img.get_pixel(mx, my).r > 0.05:
-			return cp.patch_name
+			return cp.get("instance_id", "")
 		# Transparent here — fall through to patch below
 	return ""
 

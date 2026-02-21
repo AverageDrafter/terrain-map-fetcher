@@ -53,17 +53,17 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.bbox and _is_cached(out_dir, tuple(args.bbox)):
-        print("Cache hit — bbox unchanged, skipping imagery download.")
+        print("Cache hit -- bbox unchanged, skipping imagery download.")
         sys.exit(0)
 
     urls = [l.strip() for l in url_list_path.read_text().splitlines() if l.strip()]
     if not urls:
-        print("No imagery URLs — skipping.")
+        print("No imagery URLs -- skipping.")
         sys.exit(0)
 
     url = urls[0]
-    print(f"Downloading NAIP imagery…")
-    print(f"  URL: {url[:120]}…")
+    print(f"Downloading NAIP imagery...")
+    print(f"  URL: {url[:120]}...")
 
     # Download the WMS PNG.
     try:
@@ -87,7 +87,7 @@ def main() -> None:
 
     print(f"  Raw size: {img.width}x{img.height}, mode: {img.mode}")
 
-    # Convert to RGB — drop any alpha the WMS may have added.
+    # Convert to RGB -- drop any alpha the WMS may have added.
     img = img.convert("RGB")
 
     # Downscale to MAX_SIZE if needed (pre-scale before final resize).
@@ -98,7 +98,7 @@ def main() -> None:
     # Reproject from WGS84 to UTM and resize to match the heightmap exactly.
     meta = _parse_dem_meta(out_dir)
     if meta:
-        arr = np.array(img)          # H×W×3 uint8
+        arr = np.array(img)          # HxWx3 uint8
         src_h, src_w = arr.shape[:2]
         src_crs = CRS.from_epsg(4326)
         dst_crs = CRS.from_epsg(meta["epsg"])
@@ -115,24 +115,24 @@ def main() -> None:
                 dst_crs=dst_crs,
                 resampling=Resampling.lanczos,
             )
-        img = Image.fromarray(warped.transpose(1, 2, 0))  # back to H×W×3
-        print(f"  Reprojected WGS84 → UTM, final size: {img.width}x{img.height}")
+        img = Image.fromarray(warped.transpose(1, 2, 0))  # back to HxWx3
+        print(f"  Reprojected WGS84 -> UTM, final size: {img.width}x{img.height}")
     else:
-        print("  Warning: heightmap_000_meta.txt not found — skipping reprojection")
+        print("  Warning: heightmap_000_meta.txt not found -- skipping reprojection")
 
-    # ── Save plain RGB PNG for Terrain3D Color Map slot ─────────────────────
+    # -- Save plain RGB PNG for Terrain3D Color Map slot ---------------------
     out_path = out_dir / "imagery_000.png"
     img.save(str(out_path), format="PNG")
-    print(f"✓ Saved: {out_path.name}")
+    print(f"OK Saved: {out_path.name}")
     print(f"  Size: {img.width}x{img.height}, mode: RGB")
     print(f"  Use this as the Color Map in the Terrain3D Importer")
 
-    # ── Save 256×256 preview thumbnail ────────────────────────────────────────
+    # -- Save 256x256 preview thumbnail ----------------------------------------
     preview_path = out_dir / "preview.png"
     preview = img.copy()
     preview.thumbnail((256, 256), Image.LANCZOS)
     preview.save(str(preview_path), format="PNG")
-    print(f"✓ Saved preview: {preview_path.name} ({preview.width}x{preview.height})")
+    print(f"OK Saved preview: {preview_path.name} ({preview.width}x{preview.height})")
 
     _write_meta(out_dir / "imagery_000_meta.txt", img.width, img.height, url)
     print("Imagery processing complete.")
@@ -193,7 +193,7 @@ def _parse_dem_meta(out_dir: Path):
 
 def _write_meta(path: Path, width: int, height: int, url: str) -> None:
     lines = [
-        "Terrain Map Fetcher — Imagery Metadata",
+        "Terrain Map Fetcher -- Imagery Metadata",
         "=" * 40,
         f"Output file:  imagery_000.png",
         f"Size:         {width} x {height} px",
@@ -211,13 +211,13 @@ def _write_meta(path: Path, width: int, height: int, url: str) -> None:
         "  4. Toggle run_import = true  (imports into memory)",
         "  5. Toggle save_to_disk = true  (writes to TerrainData/)",
         "",
-        "  Do NOT use the Asset Dock — that applies a repeating texture,",
+        "  Do NOT use the Asset Dock -- that applies a repeating texture,",
         "  not a georeferenced color map.",
         "",
         "Note: imagery_000.png covers the exact same geographic bbox as",
-        "heightmap_000.exr — they are perfectly aligned.",
+        "heightmap_000.exr -- they are perfectly aligned.",
         "",
-        f"Source: USGS NAIP via {url[:80]}…",
+        f"Source: USGS NAIP via {url[:80]}...",
     ]
     path.write_text("\n".join(lines))
 

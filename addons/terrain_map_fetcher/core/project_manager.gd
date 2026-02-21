@@ -8,7 +8,7 @@ var project_dir: String = ""
 var patches: Array = []           # Array[Patch]
 var vertex_spacing: float = 28.0
 var height_offset: float = -1657.0
-var canvas_patches: Array = []    # Array[{patch_name, canvas_x, canvas_y}]
+var canvas_patches: Array = []    # Array[{instance_id, patch_name, canvas_x, canvas_y, scale_xy, scale_z}]
 
 signal patches_changed()
 
@@ -57,6 +57,7 @@ func _load_project() -> bool:
 	height_offset  = float(gs.get("height_offset", -1657.0))
 	var cv: Dictionary = data.get("canvas", {})
 	canvas_patches = cv.get("patches", [])
+	_migrate_canvas_patches()
 	_scan_patches()
 	return true
 
@@ -226,25 +227,68 @@ func _parse_dem_meta_txt(meta_path: String) -> Dictionary:
 
 # ── Canvas layout ─────────────────────────────────────────────────────────────
 
-func add_to_canvas(patch_name: String, canvas_x: int = 0, canvas_y: int = 0) -> void:
+func _migrate_canvas_patches() -> void:
+	## Upgrade legacy entries (missing instance_id / scale fields) to the new format.
 	for cp in canvas_patches:
-		if cp.get("patch_name", "") == patch_name:
-			return
+		if not cp.has("instance_id"):
+			var pname: String = cp.get("patch_name", "unknown")
+			cp["instance_id"] = _generate_instance_id(pname)
+		if not cp.has("scale_xy"):
+			cp["scale_xy"] = 1.0
+		if not cp.has("scale_z"):
+			cp["scale_z"] = 1.0
+
+
+func _generate_instance_id(patch_name: String) -> String:
+	## Returns the next free instance ID for patch_name, e.g. "pikes_peak_0".
+	var idx := 0
+	while true:
+		var candidate: String = patch_name + "_" + str(idx)
+		var taken := false
+		for cp in canvas_patches:
+			if cp.get("instance_id", "") == candidate:
+				taken = true
+				break
+		if not taken:
+			return candidate
+		idx += 1
+	return patch_name + "_0"  # unreachable
+
+
+func add_to_canvas(patch_name: String, canvas_x: int = 0, canvas_y: int = 0) -> String:
+	## Places a new instance of patch_name on the canvas. Returns the instance_id.
+	var iid: String = _generate_instance_id(patch_name)
 	canvas_patches.append({
-		"patch_name": patch_name, "canvas_x": canvas_x, "canvas_y": canvas_y})
+		"instance_id": iid,
+		"patch_name":  patch_name,
+		"canvas_x":    canvas_x,
+		"canvas_y":    canvas_y,
+		"scale_xy":    1.0,
+		"scale_z":     1.0,
+	})
 	save_project()
+	return iid
 
 
-func remove_from_canvas(patch_name: String) -> void:
+func remove_from_canvas(instance_id: String) -> void:
 	canvas_patches = canvas_patches.filter(
-		func(cp): return cp.get("patch_name", "") != patch_name)
+		func(cp): return cp.get("instance_id", "") != instance_id)
 	save_project()
 
 
-func update_canvas_position(patch_name: String, cx: int, cy: int) -> void:
+func update_canvas_position(instance_id: String, cx: int, cy: int) -> void:
 	for cp in canvas_patches:
-		if cp.get("patch_name", "") == patch_name:
+		if cp.get("instance_id", "") == instance_id:
 			cp["canvas_x"] = cx
 			cp["canvas_y"] = cy
+			break
+	save_project()
+
+
+func update_canvas_scale(instance_id: String, sxy: float, sz: float) -> void:
+	for cp in canvas_patches:
+		if cp.get("instance_id", "") == instance_id:
+			cp["scale_xy"] = sxy
+			cp["scale_z"]  = sz
 			break
 	save_project()

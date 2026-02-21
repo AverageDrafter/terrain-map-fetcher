@@ -44,7 +44,7 @@ def main() -> None:
     exports_dir = project_dir / "exports" / export_name
     exports_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Load project.json ─────────────────────────────────────────────────────
+    # -- Load project.json -----------------------------------------------------
     project_json = project_dir / "project.json"
     if not project_json.exists():
         print(f"ERROR: project.json not found at {project_json}", file=sys.stderr)
@@ -58,14 +58,16 @@ def main() -> None:
         print("ERROR: No patches placed on canvas.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Compositing {len(canvas_patches)} placed patch(es)…")
+    print(f"Compositing {len(canvas_patches)} placed patch(es)...")
 
-    # ── Load each patch ───────────────────────────────────────────────────────
+    # -- Load each patch -------------------------------------------------------
     loaded = []
     for cp in canvas_patches:
         patch_name = cp.get("patch_name", "")
         cx = int(cp.get("canvas_x", 0))
         cy = int(cp.get("canvas_y", 0))
+        scale_xy = float(cp.get("scale_xy", 1.0))
+        scale_z  = float(cp.get("scale_z",  1.0))
         patch_dir = project_dir / "patches" / patch_name
 
         # Load meta.json
@@ -113,24 +115,38 @@ def main() -> None:
             print(f"  Skipping '{patch_name}': EXR read error: {e}", file=sys.stderr)
             continue
 
+        # Apply scale_z (height exaggeration)
+        if abs(scale_z - 1.0) > 1e-6:
+            hm_data = hm_data * scale_z
+
+        # Compute effective canvas dimensions after scale_xy
+        effective_w = max(1, int(round(w * scale_xy)))
+        effective_h = max(1, int(round(h * scale_xy)))
+
+        # Resize heightmap to effective dimensions if needed
+        if effective_w != w or effective_h != h:
+            hm_pil = Image.fromarray(hm_data, mode='F')
+            hm_pil = hm_pil.resize((effective_w, effective_h), Image.LANCZOS)
+            hm_data = np.array(hm_pil, dtype=np.float32)
+
         # Read imagery
         img_data = None
         if img_path:
             try:
                 img_pil = Image.open(img_path).convert("RGB")
-                img_pil = img_pil.resize((w, h), Image.LANCZOS)
+                img_pil = img_pil.resize((effective_w, effective_h), Image.LANCZOS)
                 img_data = np.array(img_pil, dtype=np.uint8)
             except Exception as e:
                 print(f"  Warning: could not load imagery for '{patch_name}': {e}")
 
-        # Read mask (optional) — grayscale 0–255
+        # Read mask (optional) -- grayscale 0-255
         mask_path = patch_dir / "mask.png"
         mask_data = None
         feather_px = int(meta.get("mask_feather_px", 0))
         if mask_path.exists():
             try:
                 mask_pil = Image.open(mask_path).convert("L")
-                mask_pil = mask_pil.resize((w, h), Image.NEAREST)
+                mask_pil = mask_pil.resize((effective_w, effective_h), Image.NEAREST)
                 # Apply Gaussian feathering if requested
                 if feather_px > 0:
                     mask_pil = mask_pil.filter(GaussianBlur(radius=feather_px))
@@ -140,25 +156,28 @@ def main() -> None:
 
         # If no mask, treat the entire patch as fully opaque
         if mask_data is None:
-            mask_data = np.ones((h, w), dtype=np.float32)
+            mask_data = np.ones((effective_h, effective_w), dtype=np.float32)
 
         loaded.append({
-            "name":     patch_name,
-            "cx":       cx,
-            "cy":       cy,
-            "w":        w,
-            "h":        h,
-            "hm":       hm_data,
-            "img":      img_data,
-            "mask":     mask_data,
+            "name":      patch_name,
+            "instance":  cp.get("instance_id", patch_name),
+            "cx":        cx,
+            "cy":        cy,
+            "w":         effective_w,
+            "h":         effective_h,
+            "scale_xy":  scale_xy,
+            "scale_z":   scale_z,
+            "hm":        hm_data,
+            "img":       img_data,
+            "mask":      mask_data,
         })
-        print(f"  ✓ Loaded '{patch_name}' ({w}×{h} px, offset {cx},{cy})")
+        print(f"  OK Loaded '{patch_name}' ({effective_w}x{effective_h} px, scale_xy={scale_xy}, scale_z={scale_z}, offset {cx},{cy})")
 
     if not loaded:
         print("ERROR: No valid patches could be loaded.", file=sys.stderr)
         sys.exit(1)
 
-    # ── Compute canvas bounds ─────────────────────────────────────────────────
+    # -- Compute canvas bounds -------------------------------------------------
     min_cx = min(p["cx"] for p in loaded)
     min_cy = min(p["cy"] for p in loaded)
     max_cx = max(p["cx"] + p["w"] for p in loaded)
@@ -166,9 +185,9 @@ def main() -> None:
 
     canvas_w = max_cx - min_cx
     canvas_h = max_cy - min_cy
-    print(f"\nCanvas size: {canvas_w}×{canvas_h} px")
+    print(f"\nCanvas size: {canvas_w}x{canvas_h} px")
 
-    # ── Composite ─────────────────────────────────────────────────────────────
+    # -- Composite -------------------------------------------------------------
     out_hm    = np.zeros((canvas_h, canvas_w), dtype=np.float32)
     out_alpha = np.zeros((canvas_h, canvas_w), dtype=np.float32)
     out_img   = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
@@ -212,9 +231,9 @@ def main() -> None:
                 img_region * new_alpha_3 +
                 out_img[py0:py1, px0:px1] * old_alpha_3) / denom[:, :, np.newaxis]
 
-    print(f"\nElevation range: {out_hm.min():.1f}m – {out_hm.max():.1f}m")
+    print(f"\nElevation range: {out_hm.min():.1f}m - {out_hm.max():.1f}m")
 
-    # ── Write combined EXR ────────────────────────────────────────────────────
+    # -- Write combined EXR ----------------------------------------------------
     exr_out_path = exports_dir / "heightmap.exr"
     header  = OpenEXR.Header(canvas_w, canvas_h)
     channel = Imath.Channel(Imath.PixelType(Imath.PixelType.FLOAT))
@@ -222,15 +241,15 @@ def main() -> None:
     exr_out = OpenEXR.OutputFile(str(exr_out_path), header)
     exr_out.writePixels({"R": out_hm.tobytes()})
     exr_out.close()
-    print(f"✓ Saved: {exr_out_path}")
+    print(f"OK Saved: {exr_out_path}")
 
-    # ── Write combined imagery ────────────────────────────────────────────────
+    # -- Write combined imagery ------------------------------------------------
     img_out_path = exports_dir / "imagery.png"
     img_out_arr = np.clip(out_img, 0, 255).astype(np.uint8)
     Image.fromarray(img_out_arr, "RGB").save(str(img_out_path))
-    print(f"✓ Saved: {img_out_path}")
+    print(f"OK Saved: {img_out_path}")
 
-    # ── Write metadata ────────────────────────────────────────────────────────
+    # -- Write metadata --------------------------------------------------------
     meta_out = exports_dir / "export_meta.json"
     with open(meta_out, "w") as f:
         json.dump({
@@ -240,11 +259,13 @@ def main() -> None:
             "patch_count":      len(loaded),
             "elev_min_m":       float(out_hm.min()),
             "elev_max_m":       float(out_hm.max()),
-            "patches": [{"name": p["name"], "cx": p["cx"], "cy": p["cy"]}
+            "patches": [{"instance_id": p["instance"], "name": p["name"],
+                          "cx": p["cx"], "cy": p["cy"],
+                          "scale_xy": p["scale_xy"], "scale_z": p["scale_z"]}
                         for p in loaded],
         }, f, indent=2)
-    print(f"✓ Saved: {meta_out}")
-    print(f"\nComposition complete → {exports_dir}")
+    print(f"OK Saved: {meta_out}")
+    print(f"\nComposition complete -> {exports_dir}")
 
 
 if __name__ == "__main__":
