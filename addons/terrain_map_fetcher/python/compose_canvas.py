@@ -64,15 +64,22 @@ def _resample_rgb(arr, w, h):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project-dir",    required=True)
-    parser.add_argument("--export-name",    required=True)
-    parser.add_argument("--max-resolution", type=int, default=8192,
-                        help="Maximum output canvas size on any side (default 8192)")
+    parser.add_argument("--project-dir",   required=True)
+    parser.add_argument("--export-name",   required=True)
+    parser.add_argument("--out-width",     type=int, default=2048,
+                        help="Max output width in pixels (aspect ratio preserved)")
+    parser.add_argument("--out-height",    type=int, default=2048,
+                        help="Max output height in pixels (aspect ratio preserved)")
+    parser.add_argument("--edge-feather",  type=int, default=0,
+                        help="Gaussian blur radius (output px) applied to mask edges")
+    # Legacy fallback — kept for CLI use
+    parser.add_argument("--max-resolution", type=int, default=0,
+                        help="Deprecated: use --out-width/--out-height instead")
     args = parser.parse_args()
 
-    project_dir = Path(args.project_dir)
-    export_name = args.export_name
-    max_res     = max(64, args.max_resolution)
+    project_dir   = Path(args.project_dir)
+    export_name   = args.export_name
+    edge_feather  = max(0, args.edge_feather)
     exports_dir = project_dir / "exports" / export_name
     exports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -213,14 +220,19 @@ def main() -> None:
     print(f"\nCanvas extent: {canvas_w}x{canvas_h} canvas-px")
 
     # -- Determine output resolution -------------------------------------------
-    long_side   = max(canvas_w, canvas_h)
-    out_scale   = min(1.0, max_res / long_side)
+    # Fit canvas within requested dimensions while preserving aspect ratio.
+    if args.max_resolution > 0:
+        # Legacy path
+        scale_x = args.max_resolution / canvas_w
+        scale_y = args.max_resolution / canvas_h
+    else:
+        scale_x = max(1, args.out_width)  / canvas_w
+        scale_y = max(1, args.out_height) / canvas_h
+    out_scale = min(scale_x, scale_y, 1.0)  # never upscale
     out_w = max(1, int(round(canvas_w * out_scale)))
     out_h = max(1, int(round(canvas_h * out_scale)))
-    if out_scale < 1.0:
-        print(f"Downsampling to {out_w}x{out_h} px (max-resolution={max_res})")
-    else:
-        print(f"Output size: {out_w}x{out_h} px")
+    print(f"Output: {out_w}x{out_h} px  (scale {out_scale:.4f})"
+          + (f"  feather={edge_feather}px" if edge_feather > 0 else ""))
 
     # -- Composite -------------------------------------------------------------
     out_hm    = np.zeros((out_h, out_w), dtype=np.float32)
@@ -237,10 +249,16 @@ def main() -> None:
         oy1 = oy0 + ph
 
         # Resample all layers to output dimensions
-        hm_rs   = _resample_f32(patch["hm"],  pw, ph)
+        hm_rs   = _resample_f32(patch["hm"],   pw, ph)
         mask_rs = _resample_mask(patch["mask"], pw, ph)
         img_rs  = (_resample_rgb(patch["img"], pw, ph)
                    if patch["img"] is not None else None)
+
+        # Apply edge feather (blurs the mask so patch edges blend softly)
+        if edge_feather > 0:
+            mask_pil = Image.fromarray((mask_rs * 255).astype(np.uint8), mode='L')
+            mask_pil = mask_pil.filter(GaussianBlur(radius=edge_feather))
+            mask_rs  = np.array(mask_pil, dtype=np.float32) / 255.0
 
         # Clip to output canvas bounds
         px0 = max(0, ox0);    py0 = max(0, oy0)
@@ -298,9 +316,9 @@ def main() -> None:
     with open(meta_out, "w") as f:
         json.dump({
             "export_name":      export_name,
-            "max_resolution":   max_res,
             "output_width_px":  out_w,
             "output_height_px": out_h,
+            "edge_feather_px":  edge_feather,
             "canvas_width_px":  canvas_w,
             "canvas_height_px": canvas_h,
             "patch_count":      len(loaded),

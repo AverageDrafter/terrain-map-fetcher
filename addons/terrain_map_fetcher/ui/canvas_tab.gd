@@ -21,7 +21,9 @@ var _zoom_lbl: Label
 var _vertex_spacing_spin: SpinBox
 var _height_offset_spin: SpinBox
 var _export_name_edit: LineEdit
-var _max_resolution_spin: SpinBox
+var _export_w_spin: SpinBox
+var _export_h_spin: SpinBox
+var _edge_feather_spin: SpinBox
 var _auto_import_check: CheckBox
 var _python_runner: Node
 var _status_lbl: Label
@@ -154,7 +156,7 @@ func _build_ui() -> void:
 	right_scroll.add_child(right)
 
 	# Placed patches section
-	right.add_child(_make_section_label("PLACED PATCHES"))
+	right.add_child(_make_section_label("LAYERS"))
 
 	var placed_scroll := ScrollContainer.new()
 	placed_scroll.custom_minimum_size = Vector2(0, 100)
@@ -174,7 +176,7 @@ func _build_ui() -> void:
 	_selected_section.visible = false
 	right.add_child(_selected_section)
 
-	_selected_section.add_child(_make_section_label("SELECTED"))
+	_selected_section.add_child(_make_section_label("SELECTED LAYER"))
 
 	_selected_instance_lbl = _make_label("", 10)
 	_selected_instance_lbl.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
@@ -187,7 +189,7 @@ func _build_ui() -> void:
 	scale_grid.add_theme_constant_override("v_separation", 4)
 	_selected_section.add_child(scale_grid)
 
-	scale_grid.add_child(_make_label("Scale XY:", 10))
+	scale_grid.add_child(_make_label("XY Scale:", 10))
 	_scale_xy_spin = SpinBox.new()
 	_scale_xy_spin.min_value = 0.01
 	_scale_xy_spin.max_value = 100.0
@@ -197,7 +199,7 @@ func _build_ui() -> void:
 	_scale_xy_spin.value_changed.connect(_on_scale_xy_changed)
 	scale_grid.add_child(_scale_xy_spin)
 
-	scale_grid.add_child(_make_label("Scale Z:", 10))
+	scale_grid.add_child(_make_label("Z Scale:", 10))
 	_scale_z_spin = SpinBox.new()
 	_scale_z_spin.min_value = 0.01
 	_scale_z_spin.max_value = 100.0
@@ -210,7 +212,7 @@ func _build_ui() -> void:
 	right.add_child(HSeparator.new())
 
 	# Global settings
-	right.add_child(_make_section_label("GLOBAL SETTINGS"))
+	right.add_child(_make_section_label("SETTINGS"))
 
 	var gs_grid := GridContainer.new()
 	gs_grid.columns = 2
@@ -218,7 +220,7 @@ func _build_ui() -> void:
 	gs_grid.add_theme_constant_override("v_separation", 4)
 	right.add_child(gs_grid)
 
-	gs_grid.add_child(_make_label("Vertex spacing (m):", 10))
+	gs_grid.add_child(_make_label("Vertex spacing:", 10))
 	_vertex_spacing_spin = SpinBox.new()
 	_vertex_spacing_spin.min_value = 1.0
 	_vertex_spacing_spin.max_value = 1000.0
@@ -228,7 +230,7 @@ func _build_ui() -> void:
 	_vertex_spacing_spin.value_changed.connect(_on_settings_changed)
 	gs_grid.add_child(_vertex_spacing_spin)
 
-	gs_grid.add_child(_make_label("Height offset (m):", 10))
+	gs_grid.add_child(_make_label("Height offset:", 10))
 	_height_offset_spin = SpinBox.new()
 	_height_offset_spin.min_value = -10000.0
 	_height_offset_spin.max_value = 10000.0
@@ -243,30 +245,56 @@ func _build_ui() -> void:
 	# Export section
 	right.add_child(_make_section_label("EXPORT"))
 
-	right.add_child(_make_label("Export name:", 10))
+	right.add_child(_make_label("Name:", 10))
 	_export_name_edit = LineEdit.new()
 	_export_name_edit.placeholder_text = "combined_terrain"
 	_export_name_edit.text = "combined_terrain"
 	right.add_child(_export_name_edit)
 
-	var res_row := HBoxContainer.new()
-	res_row.add_theme_constant_override("separation", 6)
-	right.add_child(res_row)
-	res_row.add_child(_make_label("Max res (px):", 10))
-	_max_resolution_spin = SpinBox.new()
-	_max_resolution_spin.min_value = 64
-	_max_resolution_spin.max_value = 32768
-	_max_resolution_spin.step = 64
-	_max_resolution_spin.value = 2048
-	_max_resolution_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	res_row.add_child(_max_resolution_spin)
+	# Output canvas size
+	var size_row := HBoxContainer.new()
+	size_row.add_theme_constant_override("separation", 4)
+	right.add_child(size_row)
+	size_row.add_child(_make_label("W:", 10))
+	_export_w_spin = SpinBox.new()
+	_export_w_spin.min_value = 64
+	_export_w_spin.max_value = 32768
+	_export_w_spin.step = 64
+	_export_w_spin.value = 2048
+	_export_w_spin.tooltip_text = "Output width (px). Aspect ratio is preserved."
+	_export_w_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_row.add_child(_export_w_spin)
+	size_row.add_child(_make_label("H:", 10))
+	_export_h_spin = SpinBox.new()
+	_export_h_spin.min_value = 64
+	_export_h_spin.max_value = 32768
+	_export_h_spin.step = 64
+	_export_h_spin.value = 2048
+	_export_h_spin.tooltip_text = "Output height (px). Aspect ratio is preserved."
+	_export_h_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_row.add_child(_export_h_spin)
+
+	# Edge feather
+	var feather_row := HBoxContainer.new()
+	feather_row.add_theme_constant_override("separation", 4)
+	right.add_child(feather_row)
+	feather_row.add_child(_make_label("Edge feather:", 10))
+	_edge_feather_spin = SpinBox.new()
+	_edge_feather_spin.min_value = 0
+	_edge_feather_spin.max_value = 512
+	_edge_feather_spin.step = 1
+	_edge_feather_spin.value = 32
+	_edge_feather_spin.suffix = "px"
+	_edge_feather_spin.tooltip_text = "Gaussian blur applied to mask edges at export. Smooths patch boundaries."
+	_edge_feather_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	feather_row.add_child(_edge_feather_spin)
 
 	_auto_import_check = CheckBox.new()
-	_auto_import_check.text = "Auto-import to Terrain3D"
+	_auto_import_check.text = "Import to Terrain3D"
 	right.add_child(_auto_import_check)
 
 	var export_btn := Button.new()
-	export_btn.text = "Export Canvas…"
+	export_btn.text = "Export"
 	export_btn.pressed.connect(_on_export_pressed)
 	right.add_child(export_btn)
 
@@ -530,10 +558,12 @@ func _on_export_pressed() -> void:
 	var export_name := _export_name_edit.text.strip_edges()
 	if export_name.is_empty():
 		export_name = "combined_terrain"
-	var max_res: int = int(_max_resolution_spin.value)
-	_set_status("Compositing canvas… (max %dpx)" % max_res)
+	var out_w: int = int(_export_w_spin.value)
+	var out_h: int = int(_export_h_spin.value)
+	var feather: int = int(_edge_feather_spin.value)
+	_set_status("Exporting %dx%d px…" % [out_w, out_h])
 	var result: Dictionary = _python_runner.compose_canvas(
-		_project.project_dir, export_name, max_res)
+		_project.project_dir, export_name, out_w, out_h, feather)
 	if result.get("success", false):
 		_set_status("Exported to: " + result.get("output_path", "?"))
 		if _auto_import_check.button_pressed:
