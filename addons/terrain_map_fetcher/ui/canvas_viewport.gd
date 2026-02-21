@@ -15,7 +15,6 @@ var view_scale: float = 0.1  # canvas pixels → screen pixels
 var placed_patches: Array = []
 var selected_patch_name: String = ""
 var view_mode: int = ViewMode.FLAT_COLOR
-var show_mask_outline: bool = false
 var snap_to_grid: bool = false
 
 # Texture cache: "patch_name|flat" or "patch_name|terrain" → ImageTexture

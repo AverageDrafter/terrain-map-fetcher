@@ -17,7 +17,6 @@ var _canvas: CanvasViewport
 # Right sidebar
 var _placed_list: VBoxContainer
 var _view_mode_btn: OptionButton
-var _mask_outline_btn: CheckButton
 var _zoom_lbl: Label
 var _vertex_spacing_spin: SpinBox
 var _height_offset_spin: SpinBox
@@ -89,15 +88,8 @@ func _build_ui() -> void:
 	_view_mode_btn.item_selected.connect(_on_view_mode_changed)
 	toolbar.add_child(_view_mode_btn)
 
-	_mask_outline_btn = CheckButton.new()
-	_mask_outline_btn.text = "Mask Outline"
-	_mask_outline_btn.toggled.connect(func(on: bool):
-		_canvas.show_mask_outline = on
-		_canvas.queue_redraw())
-	toolbar.add_child(_mask_outline_btn)
-
 	var snap_btn := CheckButton.new()
-	snap_btn.text = "Snap 256"
+	snap_btn.text = "Snap"
 	snap_btn.toggled.connect(func(on: bool): _canvas.snap_to_grid = on)
 	toolbar.add_child(snap_btn)
 
