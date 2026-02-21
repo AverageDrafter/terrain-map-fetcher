@@ -242,6 +242,11 @@ func on_patches_changed() -> void:
 		_refresh_palette()
 
 
+func on_mask_saved(patch_name: String) -> void:
+	_canvas.invalidate_patch_cache(patch_name)
+	_canvas.queue_redraw()
+
+
 # ── Palette ───────────────────────────────────────────────────────────────────
 
 func _refresh_palette() -> void:

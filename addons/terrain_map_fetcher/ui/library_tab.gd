@@ -102,7 +102,7 @@ func _build_ui() -> void:
 	_mask_editor.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_mask_editor.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(_mask_editor)
-	# No signal connection needed — mask_editor updates its own display on apply
+	_mask_editor.mask_saved.connect(_on_mask_saved)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -364,6 +364,14 @@ func _on_delete_pressed() -> void:
 	)
 	confirm.canceled.connect(func(): confirm.queue_free())
 	confirm.popup_centered()
+
+
+func _on_mask_saved() -> void:
+	if _selected_patch == null:
+		return
+	var pname: String = _selected_patch.name
+	if _panel and _panel.has_method("on_mask_saved"):
+		_panel.on_mask_saved(pname)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

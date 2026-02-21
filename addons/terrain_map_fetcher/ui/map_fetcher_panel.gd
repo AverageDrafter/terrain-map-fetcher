@@ -165,3 +165,10 @@ func get_file_dialog() -> FileDialog:
 func on_patches_changed() -> void:
 	if _canvas_tab and _canvas_tab.has_method("on_patches_changed"):
 		_canvas_tab.on_patches_changed()
+
+
+## Called by library tab after a mask is saved, so the canvas can drop its
+## cached texture for that patch and redraw with the new mask.
+func on_mask_saved(patch_name: String) -> void:
+	if _canvas_tab and _canvas_tab.has_method("on_mask_saved"):
+		_canvas_tab.on_mask_saved(patch_name)

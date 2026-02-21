@@ -18,6 +18,9 @@ var view_mode: int = ViewMode.FLAT_COLOR
 var show_mask_outline: bool = false
 var snap_to_grid: bool = false
 
+# Texture cache: "patch_name|flat" or "patch_name|terrain" → ImageTexture
+var _tex_cache: Dictionary = {}
+
 # Pan / drag state
 var _is_panning: bool = false
 var _pan_start: Vector2 = Vector2.ZERO
@@ -26,6 +29,7 @@ var _drag_name: String = ""
 var _drag_offset: Vector2 = Vector2.ZERO
 
 const SNAP_SIZE: float = 256.0
+const MASK_TEX_SIZE: int = 128  # resolution of cached mask textures
 
 # Palette for flat-color mode
 const PATCH_COLORS: Array = [
@@ -49,6 +53,7 @@ func _ready() -> void:
 func load_from_project(project: Object) -> void:
 	placed_patches.clear()
 	selected_patch_name = ""
+	_tex_cache.clear()
 	if project == null or not project.is_open():
 		queue_redraw()
 		return
@@ -90,8 +95,24 @@ func remove_patch(patch_name: String) -> void:
 		func(cp): return cp.patch_name != patch_name)
 	if selected_patch_name == patch_name:
 		selected_patch_name = ""
+	invalidate_patch_cache(patch_name)
 	queue_redraw()
 	canvas_changed.emit()
+
+
+## Invalidate cached textures for one patch (or all if patch_name is empty).
+## Call this after a mask has been edited and saved.
+func invalidate_patch_cache(patch_name: String = "") -> void:
+	if patch_name.is_empty():
+		_tex_cache.clear()
+		return
+	var keys_to_erase: Array = []
+	for k in _tex_cache:
+		var key: String = k
+		if key.begins_with(patch_name + "|"):
+			keys_to_erase.append(k)
+	for k in keys_to_erase:
+		_tex_cache.erase(k)
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
@@ -101,43 +122,33 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.12, 0.12, 0.12))
 	_draw_grid()
 
-	# Patches
+	# Patches — rendered with mask applied as alpha
 	for i in placed_patches.size():
 		var cp: Dictionary = placed_patches[i]
 		var patch: Object = cp.get("patch_ref")
-		var screen_pos := _canvas_to_screen(Vector2(cp.canvas_x, cp.canvas_y))
-		var patch_screen_size := _patch_screen_size(patch)
+		var screen_pos: Vector2 = _canvas_to_screen(Vector2(cp.canvas_x, cp.canvas_y))
+		var patch_screen_size: Vector2 = _patch_screen_size(patch)
 
 		match view_mode:
 			ViewMode.FLAT_COLOR:
-				draw_rect(Rect2(screen_pos, patch_screen_size), cp.color, true)
+				var tex: ImageTexture = _get_flat_tex(cp.patch_name, patch, cp.color)
+				draw_texture_rect(tex, Rect2(screen_pos, patch_screen_size), false)
 			ViewMode.TERRAIN:
-				if patch and patch.has_method("load_thumbnail"):
-					var thumb: ImageTexture = patch.load_thumbnail()
-					if thumb:
-						draw_texture_rect(thumb,
-							Rect2(screen_pos, patch_screen_size), false)
-					else:
-						draw_rect(Rect2(screen_pos, patch_screen_size), cp.color, true)
-				else:
-					draw_rect(Rect2(screen_pos, patch_screen_size), cp.color, true)
-
-		# Mask outline
-		if show_mask_outline and patch and patch.has_method("has_mask") and patch.has_mask():
-			draw_rect(Rect2(screen_pos, patch_screen_size),
-				Color(1.0, 1.0, 0.0, 0.9), false, 1.5)
+				var tex: ImageTexture = _get_terrain_tex(cp.patch_name, patch, cp.color)
+				draw_texture_rect(tex, Rect2(screen_pos, patch_screen_size), false)
 
 		# Patch name label
 		if patch_screen_size.x > 40 and patch_screen_size.y > 16:
 			draw_string(ThemeDB.fallback_font,
 				screen_pos + Vector2(4, 14), cp.patch_name,
 				HORIZONTAL_ALIGNMENT_LEFT, patch_screen_size.x - 8,
-				11, Color(1, 1, 1, 0.9))
+				11, Color(1, 1, 1, 0.85))
 
-		# Selection border
+		# Selection indicator: faint outline of full patch extent only when selected.
+		# Shows how far the mask blending CAN extend.
 		if cp.patch_name == selected_patch_name:
 			draw_rect(Rect2(screen_pos, patch_screen_size),
-				Color.WHITE, false, 2.0)
+				Color(1.0, 1.0, 1.0, 0.28), false, 1.0)
 
 
 func _draw_grid() -> void:
@@ -319,3 +330,74 @@ func fit_patches() -> void:
 
 func get_zoom_percent() -> int:
 	return int(view_scale * 1000)  # 0.1 → 100%
+
+
+# ── Texture builders (mask applied as alpha, cached per patch per mode) ────────
+
+func _get_flat_tex(patch_name: String, patch: Object, color: Color) -> ImageTexture:
+	var key: String = patch_name + "|flat"
+	if _tex_cache.has(key):
+		return _tex_cache[key] as ImageTexture
+
+	var img: Image = Image.create(MASK_TEX_SIZE, MASK_TEX_SIZE, false, Image.FORMAT_RGBA8)
+	var has_mask: bool = (patch != null
+		and patch.has_method("has_mask")
+		and patch.has_mask())
+
+	if has_mask:
+		var patch_dir: String = patch.patch_dir
+		var mask_path: String = patch_dir.path_join("mask.png")
+		var mask_img: Image = Image.load_from_file(mask_path)
+		if mask_img != null:
+			mask_img.resize(MASK_TEX_SIZE, MASK_TEX_SIZE, Image.INTERPOLATE_BILINEAR)
+			for y in MASK_TEX_SIZE:
+				for x in MASK_TEX_SIZE:
+					var m: Color = mask_img.get_pixel(x, y)
+					img.set_pixel(x, y, Color(color.r, color.g, color.b, m.r))
+		else:
+			img.fill(Color(color.r, color.g, color.b, 0.7))
+	else:
+		img.fill(Color(color.r, color.g, color.b, 0.7))
+
+	var tex: ImageTexture = ImageTexture.create_from_image(img)
+	_tex_cache[key] = tex
+	return tex
+
+
+func _get_terrain_tex(patch_name: String, patch: Object, color: Color) -> ImageTexture:
+	var key: String = patch_name + "|terrain"
+	if _tex_cache.has(key):
+		return _tex_cache[key] as ImageTexture
+
+	var tex: ImageTexture = null
+
+	if patch != null and patch.has_method("load_thumbnail"):
+		var thumb: ImageTexture = patch.load_thumbnail()
+		if thumb != null:
+			var img: Image = thumb.get_image()
+			if img != null:
+				img = img.duplicate()
+				img.convert(Image.FORMAT_RGBA8)
+				var has_mask: bool = (patch.has_method("has_mask") and patch.has_mask())
+				if has_mask:
+					var patch_dir: String = patch.patch_dir
+					var mask_path: String = patch_dir.path_join("mask.png")
+					var mask_img: Image = Image.load_from_file(mask_path)
+					if mask_img != null:
+						var iw: int = img.get_width()
+						var ih: int = img.get_height()
+						mask_img.resize(iw, ih, Image.INTERPOLATE_BILINEAR)
+						for y in ih:
+							for x in iw:
+								var pixel: Color = img.get_pixel(x, y)
+								var m: Color = mask_img.get_pixel(x, y)
+								pixel.a = m.r
+								img.set_pixel(x, y, pixel)
+				tex = ImageTexture.create_from_image(img)
+
+	# Fall back to flat colour texture if thumbnail unavailable
+	if tex == null:
+		tex = _get_flat_tex(patch_name, patch, color)
+
+	_tex_cache[key] = tex
+	return tex
