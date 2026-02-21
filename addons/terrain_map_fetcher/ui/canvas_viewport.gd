@@ -20,6 +20,11 @@ var snap_to_grid: bool = false
 
 # Texture cache: "patch_name|flat" or "patch_name|terrain" → ImageTexture
 var _tex_cache: Dictionary = {}
+# Mask image cache for hit testing: patch_name → Image (or null if no mask)
+var _mask_image_cache: Dictionary = {}
+
+# Hover state
+var _hover_patch_name: String = ""
 
 # Pan / drag state
 var _is_panning: bool = false
@@ -46,6 +51,10 @@ func _ready() -> void:
 	focus_mode = Control.FOCUS_CLICK
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	clip_contents = true
+	mouse_exited.connect(func():
+		if not _hover_patch_name.is_empty():
+			_hover_patch_name = ""
+			queue_redraw())
 
 
 # ── Populate from project ─────────────────────────────────────────────────────
@@ -53,7 +62,9 @@ func _ready() -> void:
 func load_from_project(project: Object) -> void:
 	placed_patches.clear()
 	selected_patch_name = ""
+	_hover_patch_name = ""
 	_tex_cache.clear()
+	_mask_image_cache.clear()
 	if project == null or not project.is_open():
 		queue_redraw()
 		return
@@ -105,6 +116,7 @@ func remove_patch(patch_name: String) -> void:
 func invalidate_patch_cache(patch_name: String = "") -> void:
 	if patch_name.is_empty():
 		_tex_cache.clear()
+		_mask_image_cache.clear()
 		return
 	var keys_to_erase: Array = []
 	for k in _tex_cache:
@@ -113,6 +125,7 @@ func invalidate_patch_cache(patch_name: String = "") -> void:
 			keys_to_erase.append(k)
 	for k in keys_to_erase:
 		_tex_cache.erase(k)
+	_mask_image_cache.erase(patch_name)
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
@@ -137,18 +150,18 @@ func _draw() -> void:
 				var tex: ImageTexture = _get_terrain_tex(cp.patch_name, patch, cp.color)
 				draw_texture_rect(tex, Rect2(screen_pos, patch_screen_size), false)
 
-		# Patch name label
-		if patch_screen_size.x > 40 and patch_screen_size.y > 16:
+		# Name label + border — visible on hover or selection only.
+		var is_selected: bool = cp.patch_name == selected_patch_name
+		var is_hovered: bool  = cp.patch_name == _hover_patch_name
+
+		if is_selected or is_hovered:
 			draw_string(ThemeDB.fallback_font,
 				screen_pos + Vector2(4, 14), cp.patch_name,
 				HORIZONTAL_ALIGNMENT_LEFT, patch_screen_size.x - 8,
-				11, Color(1, 1, 1, 0.85))
-
-		# Selection indicator: faint outline of full patch extent only when selected.
-		# Shows how far the mask blending CAN extend.
-		if cp.patch_name == selected_patch_name:
+				11, Color(1, 1, 1, 0.9))
+			var border_alpha: float = 0.45 if is_selected else 0.22
 			draw_rect(Rect2(screen_pos, patch_screen_size),
-				Color(1.0, 1.0, 1.0, 0.28), false, 1.0)
+				Color(1.0, 1.0, 1.0, border_alpha), false, 1.0)
 
 
 func _draw_grid() -> void:
@@ -237,6 +250,12 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 				cp["canvas_y"] = int(canvas_pos.y)
 				break
 		queue_redraw()
+	else:
+		# Update hover — uses alpha-aware hit test
+		var new_hover: String = _hit_test_at(event.position)
+		if new_hover != _hover_patch_name:
+			_hover_patch_name = new_hover
+			queue_redraw()
 
 
 func _zoom(center: Vector2, factor: float) -> void:
@@ -248,45 +267,32 @@ func _zoom(center: Vector2, factor: float) -> void:
 
 
 func _on_left_press(pos: Vector2) -> void:
-	var canvas_pos := _screen_to_canvas(pos)
 	_drag_name = ""
+	var hit: String = _hit_test_at(pos)
 
-	# Iterate in reverse (top-most patch first)
+	if hit.is_empty():
+		selected_patch_name = ""
+		queue_redraw()
+		patch_selected.emit("")
+		return
+
 	for i in range(placed_patches.size() - 1, -1, -1):
 		var cp: Dictionary = placed_patches[i]
-		var patch: Object = cp.get("patch_ref")
-		var patch_canvas_pos := Vector2(cp.canvas_x, cp.canvas_y)
-		var patch_size := Vector2(
-			float(patch.width_px)  if patch and patch.width_px > 0  else 1024.0,
-			float(patch.height_px) if patch and patch.height_px > 0 else 1024.0)
-
-		if Rect2(patch_canvas_pos, patch_size).has_point(canvas_pos):
-			selected_patch_name = cp.patch_name
-			_drag_name = cp.patch_name
-			# Drag offset: how far from top-left of patch in screen coords
-			_drag_offset = pos - _canvas_to_screen(patch_canvas_pos)
-			queue_redraw()
-			patch_selected.emit(cp.patch_name)
-			return
-
-	# Clicked on empty space — deselect
-	selected_patch_name = ""
-	queue_redraw()
-	patch_selected.emit("")
+		if cp.patch_name != hit:
+			continue
+		selected_patch_name = hit
+		_drag_name = hit
+		var patch_canvas_pos: Vector2 = Vector2(cp.canvas_x, cp.canvas_y)
+		_drag_offset = pos - _canvas_to_screen(patch_canvas_pos)
+		queue_redraw()
+		patch_selected.emit(hit)
+		return
 
 
 func _on_right_click(pos: Vector2) -> void:
-	var canvas_pos := _screen_to_canvas(pos)
-	for i in range(placed_patches.size() - 1, -1, -1):
-		var cp: Dictionary = placed_patches[i]
-		var patch: Object = cp.get("patch_ref")
-		var patch_canvas_pos := Vector2(cp.canvas_x, cp.canvas_y)
-		var patch_size := Vector2(
-			float(patch.width_px)  if patch and patch.width_px > 0  else 1024.0,
-			float(patch.height_px) if patch and patch.height_px > 0 else 1024.0)
-		if Rect2(patch_canvas_pos, patch_size).has_point(canvas_pos):
-			remove_patch(cp.patch_name)
-			return
+	var hit: String = _hit_test_at(pos)
+	if not hit.is_empty():
+		remove_patch(hit)
 
 
 func reset_view() -> void:
@@ -330,6 +336,46 @@ func fit_patches() -> void:
 
 func get_zoom_percent() -> int:
 	return int(view_scale * 1000)  # 0.1 → 100%
+
+
+# ── Alpha-aware hit testing ────────────────────────────────────────────────────
+
+func _hit_test_at(screen_pos: Vector2) -> String:
+	## Returns the topmost patch whose mask is non-transparent at screen_pos.
+	## Iterates from top to bottom; transparent pixels fall through to the patch below.
+	var canvas_pos: Vector2 = _screen_to_canvas(screen_pos)
+	for i in range(placed_patches.size() - 1, -1, -1):
+		var cp: Dictionary = placed_patches[i]
+		var patch: Object = cp.get("patch_ref")
+		var patch_origin: Vector2 = Vector2(cp.canvas_x, cp.canvas_y)
+		var pw: float = float(patch.width_px)  if patch and patch.width_px  > 0 else 1024.0
+		var ph: float = float(patch.height_px) if patch and patch.height_px > 0 else 1024.0
+		if not Rect2(patch_origin, Vector2(pw, ph)).has_point(canvas_pos):
+			continue
+		var mask_img: Image = _get_mask_image(cp.patch_name, patch)
+		if mask_img == null:
+			return cp.patch_name  # no mask → fully opaque everywhere
+		var uv_x: float = (canvas_pos.x - patch_origin.x) / pw
+		var uv_y: float = (canvas_pos.y - patch_origin.y) / ph
+		var mx: int = clampi(int(uv_x * float(mask_img.get_width())),  0, mask_img.get_width()  - 1)
+		var my: int = clampi(int(uv_y * float(mask_img.get_height())), 0, mask_img.get_height() - 1)
+		if mask_img.get_pixel(mx, my).r > 0.05:
+			return cp.patch_name
+		# Transparent here — fall through to patch below
+	return ""
+
+
+func _get_mask_image(patch_name: String, patch: Object) -> Image:
+	## Returns the cached mask Image for hit testing, or null if no mask exists.
+	if _mask_image_cache.has(patch_name):
+		return _mask_image_cache[patch_name] as Image
+	var mask_img: Image = null
+	if patch != null and patch.has_method("has_mask") and patch.has_mask():
+		var patch_dir: String = patch.patch_dir
+		var mask_path: String = patch_dir.path_join("mask.png")
+		mask_img = Image.load_from_file(mask_path)
+	_mask_image_cache[patch_name] = mask_img
+	return mask_img
 
 
 # ── Texture builders (mask applied as alpha, cached per patch per mode) ────────
