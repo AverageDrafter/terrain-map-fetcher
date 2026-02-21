@@ -16,6 +16,7 @@ var placed_patches: Array = []
 var selected_patch_name: String = ""
 var view_mode: int = ViewMode.FLAT_COLOR
 var show_mask_outline: bool = false
+var snap_to_grid: bool = false
 
 # Pan / drag state
 var _is_panning: bool = false
@@ -23,6 +24,8 @@ var _pan_start: Vector2 = Vector2.ZERO
 var _pan_start_offset: Vector2 = Vector2.ZERO
 var _drag_name: String = ""
 var _drag_offset: Vector2 = Vector2.ZERO
+
+const SNAP_SIZE: float = 256.0
 
 # Palette for flat-color mode
 const PATCH_COLORS: Array = [
@@ -213,7 +216,10 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 		view_offset = _pan_start_offset + (event.position - _pan_start)
 		queue_redraw()
 	elif _drag_name != "" and (event.button_mask & MOUSE_BUTTON_MASK_LEFT):
-		var canvas_pos := _screen_to_canvas(event.position - _drag_offset)
+		var raw_pos: Vector2 = _screen_to_canvas(event.position - _drag_offset)
+		var canvas_pos: Vector2 = raw_pos
+		if snap_to_grid:
+			canvas_pos = (raw_pos / SNAP_SIZE).round() * SNAP_SIZE
 		for cp in placed_patches:
 			if cp.patch_name == _drag_name:
 				cp["canvas_x"] = int(canvas_pos.x)
@@ -223,7 +229,7 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 
 
 func _zoom(center: Vector2, factor: float) -> void:
-	var new_scale: float = clamp(view_scale * factor, 0.01, 5.0)
+	var new_scale: float = clampf(view_scale * factor, 0.01, 5.0)
 	var actual_factor: float = new_scale / view_scale
 	view_offset = center - (center - view_offset) * actual_factor
 	view_scale = new_scale
@@ -255,6 +261,7 @@ func _on_left_press(pos: Vector2) -> void:
 	# Clicked on empty space — deselect
 	selected_patch_name = ""
 	queue_redraw()
+	patch_selected.emit("")
 
 
 func _on_right_click(pos: Vector2) -> void:
@@ -274,6 +281,39 @@ func _on_right_click(pos: Vector2) -> void:
 func reset_view() -> void:
 	view_offset = Vector2(40, 40)
 	view_scale  = 0.1
+	queue_redraw()
+
+
+func fit_patches() -> void:
+	## Zoom and pan to show all placed patches with padding.
+	if placed_patches.is_empty():
+		reset_view()
+		return
+	var min_x: float = INF
+	var min_y: float = INF
+	var max_x: float = -INF
+	var max_y: float = -INF
+	for cp in placed_patches:
+		var patch: Object = cp.get("patch_ref")
+		var pw: float = float(patch.width_px)  if patch and patch.width_px  > 0 else 1024.0
+		var ph: float = float(patch.height_px) if patch and patch.height_px > 0 else 1024.0
+		var cx: float = float(cp.canvas_x)
+		var cy: float = float(cp.canvas_y)
+		min_x = minf(min_x, cx)
+		min_y = minf(min_y, cy)
+		max_x = maxf(max_x, cx + pw)
+		max_y = maxf(max_y, cy + ph)
+	var content_w: float = max_x - min_x
+	var content_h: float = max_y - min_y
+	var pad: float = 40.0
+	var avail_w: float = size.x - pad * 2.0
+	var avail_h: float = size.y - pad * 2.0
+	if avail_w <= 0.0 or avail_h <= 0.0 or content_w <= 0.0 or content_h <= 0.0:
+		return
+	var scale_x: float = avail_w / content_w
+	var scale_y: float = avail_h / content_h
+	view_scale  = clampf(minf(scale_x, scale_y), 0.01, 5.0)
+	view_offset = Vector2(pad, pad) - Vector2(min_x, min_y) * view_scale
 	queue_redraw()
 
 

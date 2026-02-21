@@ -25,6 +25,7 @@ var _export_name_edit: LineEdit
 var _auto_import_check: CheckBox
 var _python_runner: Node
 var _status_lbl: Label
+var _placed_rows: Dictionary = {}  # patch_name → Label (for selection highlight)
 
 
 func _ready() -> void:
@@ -95,6 +96,11 @@ func _build_ui() -> void:
 		_canvas.queue_redraw())
 	toolbar.add_child(_mask_outline_btn)
 
+	var snap_btn := CheckButton.new()
+	snap_btn.text = "Snap 256"
+	snap_btn.toggled.connect(func(on: bool): _canvas.snap_to_grid = on)
+	toolbar.add_child(snap_btn)
+
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toolbar.add_child(spacer)
@@ -104,7 +110,7 @@ func _build_ui() -> void:
 	zoom_out.pressed.connect(func(): _canvas._zoom(_canvas.size / 2.0, 1.0 / 1.3); _update_zoom_label())
 	toolbar.add_child(zoom_out)
 
-	_zoom_lbl = _make_label("10%", 10)
+	_zoom_lbl = _make_label("100%", 10)
 	_zoom_lbl.custom_minimum_size = Vector2(40, 0)
 	_zoom_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	toolbar.add_child(_zoom_lbl)
@@ -118,6 +124,11 @@ func _build_ui() -> void:
 	reset_btn.text = "Reset"
 	reset_btn.pressed.connect(func(): _canvas.reset_view(); _update_zoom_label())
 	toolbar.add_child(reset_btn)
+
+	var fit_btn := Button.new()
+	fit_btn.text = "Fit"
+	fit_btn.pressed.connect(func(): _canvas.fit_patches(); _update_zoom_label())
+	toolbar.add_child(fit_btn)
 
 	# Canvas area
 	_canvas = CanvasViewport.new()
@@ -273,6 +284,7 @@ func _canvas_drop(pos: Vector2, data: Variant) -> void:
 # ── Placed patch list ─────────────────────────────────────────────────────────
 
 func _refresh_placed_list() -> void:
+	_placed_rows.clear()
 	for c in _placed_list.get_children():
 		c.queue_free()
 	if _project == null or not _project.is_open():
@@ -280,22 +292,42 @@ func _refresh_placed_list() -> void:
 	for cp in _project.canvas_patches:
 		var pname: String = cp.get("patch_name", "")
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 4)
+		row.add_theme_constant_override("separation", 2)
 		_placed_list.add_child(row)
+
 		var name_lbl := _make_label(pname, 10)
 		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_lbl.clip_text = true
 		row.add_child(name_lbl)
+		_placed_rows[pname] = name_lbl
+
+		var up_btn := Button.new()
+		up_btn.text = "↑"
+		up_btn.flat = true
+		up_btn.custom_minimum_size = Vector2(18, 0)
+		var pn_up := pname
+		up_btn.pressed.connect(func(): _move_patch_up(pn_up))
+		row.add_child(up_btn)
+
+		var dn_btn := Button.new()
+		dn_btn.text = "↓"
+		dn_btn.flat = true
+		dn_btn.custom_minimum_size = Vector2(18, 0)
+		var pn_dn := pname
+		dn_btn.pressed.connect(func(): _move_patch_down(pn_dn))
+		row.add_child(dn_btn)
+
 		var remove_btn := Button.new()
 		remove_btn.text = "×"
 		remove_btn.flat  = true
-		remove_btn.custom_minimum_size = Vector2(20, 0)
+		remove_btn.custom_minimum_size = Vector2(18, 0)
 		var pn := pname
 		remove_btn.pressed.connect(func():
 			_project.remove_from_canvas(pn)
 			_canvas.remove_patch(pn)
 			_refresh_placed_list())
 		row.add_child(remove_btn)
+	_sync_placed_selection()
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────────────
@@ -306,7 +338,56 @@ func _on_view_mode_changed(idx: int) -> void:
 
 
 func _on_canvas_patch_selected(_patch_name: String) -> void:
-	pass
+	_sync_placed_selection()
+
+
+func _sync_placed_selection() -> void:
+	## Highlight the selected patch row; clear all others.
+	var sel: String = _canvas.selected_patch_name
+	for pname in _placed_rows:
+		var lbl: Label = _placed_rows[pname] as Label
+		if not is_instance_valid(lbl):
+			continue
+		if pname == sel:
+			lbl.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0))
+		else:
+			lbl.remove_theme_color_override("font_color")
+
+
+func _move_patch_up(pname: String) -> void:
+	if _project == null:
+		return
+	var patches: Array = _project.canvas_patches
+	for i in patches.size():
+		var cp: Dictionary = patches[i]
+		if cp.get("patch_name", "") == pname and i > 0:
+			var earlier: Dictionary = patches[i - 1]
+			patches[i - 1] = patches[i]
+			patches[i] = earlier
+			_project.save_project()
+			var sel: String = _canvas.selected_patch_name
+			_canvas.load_from_project(_project)
+			_canvas.selected_patch_name = sel
+			_refresh_placed_list()
+			return
+
+
+func _move_patch_down(pname: String) -> void:
+	if _project == null:
+		return
+	var patches: Array = _project.canvas_patches
+	for i in patches.size():
+		var cp: Dictionary = patches[i]
+		if cp.get("patch_name", "") == pname and i < patches.size() - 1:
+			var later: Dictionary = patches[i + 1]
+			patches[i + 1] = patches[i]
+			patches[i] = later
+			_project.save_project()
+			var sel: String = _canvas.selected_patch_name
+			_canvas.load_from_project(_project)
+			_canvas.selected_patch_name = sel
+			_refresh_placed_list()
+			return
 
 
 func _on_canvas_changed() -> void:
